@@ -546,9 +546,22 @@ class DockerSandboxBackend:
             adopted = await self._sandbox_from_inspect(info)
             if adopted is None:
                 continue
-            if role == ROLE_WARM:
+            # The NAME decides, not the role label.  Docker labels cannot be
+            # changed after creation, so a container handed to a user out of the
+            # warm pool still carries role=warm for the rest of its life -- and
+            # trusting that label here would put a working sandbox back into the
+            # pool on restart and hand one user's home directory, processes and
+            # terminal to the next user who asks.  The name is renamed on claim,
+            # so it is the one thing that tells the truth.
+            kind = classify_name(name, self.settings.name_prefix)
+            if kind == "warm" and role == ROLE_WARM:
                 warm.append(adopted)
             else:
+                if kind == "unknown":
+                    logger.warning(
+                        "container %s carries our label but not our naming; keeping it out of the pool "
+                        "and letting the reaper deal with it", name,
+                    )
                 sandboxes.append(adopted)
         return sandboxes, warm
 
@@ -641,6 +654,21 @@ class DockerSandboxBackend:
 def _key_from_name(name: str, prefix: str) -> str:
     match = re.fullmatch(rf"{re.escape(prefix)}-c-([0-9a-f]{{16}})", name)
     return match.group(1) if match else ""
+
+
+def classify_name(name: str, prefix: str) -> str:
+    """Say what a container is from its name: ``sandbox``, ``warm`` or ``unknown``.
+
+    This is what adoption after a restart relies on.  It cannot rely on the
+    role label, because a claimed warm container keeps the label it was created
+    with, and a sandbox mistaken for a free warm container would be handed to
+    somebody else complete with the previous user's files.
+    """
+    if _key_from_name(name, prefix):
+        return "sandbox"
+    if re.fullmatch(rf"{re.escape(prefix)}-w-[0-9a-f]{{12}}", name):
+        return "warm"
+    return "unknown"
 
 
 def _parse_created(value: Optional[str]) -> float:

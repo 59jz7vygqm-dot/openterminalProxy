@@ -15,7 +15,7 @@ from otproxy import config, ids
 from otproxy.dockerapi import demultiplex
 from otproxy.netpool import PoolExhausted, SubnetPool
 from otproxy.proxy import request_headers, response_headers
-from otproxy.sandbox import _key_from_name, _start_failure_hint
+from otproxy.sandbox import _key_from_name, _start_failure_hint, classify_name
 
 PASSED = 0
 FAILED = 0
@@ -185,6 +185,18 @@ def test_identity() -> None:
     check("names derive from the hash", names.container.endswith(scope.key))
     check("container name recovers the key", _key_from_name(names.container, "otsbx") == scope.key)
     check("a foreign name yields no key", _key_from_name("other-c-abc", "otsbx") == "")
+
+    # Adoption after a restart decides warm vs. in-use from the name, because a
+    # claimed warm container keeps the role=warm label it was created with.
+    # Getting this wrong hands one user's container to the next one.
+    check("a renamed container reads as a sandbox", classify_name(names.container, "otsbx") == "sandbox")
+    check("a pool container reads as warm", classify_name("otsbx-w-0123456789ab", "otsbx") == "warm")
+    check("a warm name with the wrong shape is not warm",
+          classify_name("otsbx-w-nothex", "otsbx") == "unknown")
+    check("another deployment's container is not ours to pool",
+          classify_name("other-w-0123456789ab", "otsbx") == "unknown")
+    check("a sandbox name is never mistaken for warm",
+          classify_name(names.container, "otsbx") != "warm")
 
 
 def test_network_pool() -> None:

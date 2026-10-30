@@ -274,6 +274,29 @@ async def main() -> int:
                       "REACHABLE" not in output, output.strip())
                 response = await probe.get(f"{claimed.base_url}/health")
                 check("and it answers through its new address", response.status_code == 200)
+
+                # The regression that matters: a claimed container keeps the
+                # role=warm label it was created with (Docker labels are
+                # immutable), so a restart that trusted that label would put a
+                # user's live sandbox back into the pool and hand it, with their
+                # home directory and processes, to whoever asked next.
+                after_restart = SandboxManager(warm_settings, DockerSandboxBackend(warm_settings, DockerClient()))
+                await after_restart.start()
+                try:
+                    check("after a restart the claimed container is not back in the pool",
+                          all(item.container_id != claimed.container_id for item in after_restart._warm))
+                    same = await after_restart.acquire(Scope("frank"))
+                    check("its owner gets it back", same.container_id == claimed.container_id)
+                    other = await after_restart.acquire(Scope("grace"))
+                    check("and nobody else is handed it", other.container_id != claimed.container_id)
+                finally:
+                    for task in after_restart._tasks:
+                        task.cancel()
+                    await asyncio.sleep(0)
+                    for sandbox in list(after_restart._sandboxes.values()) + list(after_restart._warm):
+                        if sandbox.container_id != claimed.container_id:
+                            await after_restart.backend.destroy(sandbox)
+                    await after_restart.backend.docker.close()
         finally:
             for task in warm_manager._tasks:
                 task.cancel()

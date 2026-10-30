@@ -254,6 +254,19 @@ curl -X DELETE -H "Authorization: Bearer $OTPROXY_ADMIN_KEY" \
 curl -s -H "Authorization: Bearer $OTPROXY_ADMIN_KEY" http://localhost:8800/metrics
 ```
 
+Von außerhalb des Proxys, direkt am Daemon — das Label ist die Zugehörigkeit,
+der Name sagt, was ein Container ist (`-c-` gehört einem Nutzer, `-w-` ist aus
+dem Pool):
+
+```bash
+docker ps --filter 'label=sh.openterminal.proxy/owned=true' --format '{{.Names}}	{{.Status}}'
+```
+
+Nicht nach dem Label `role` filtern: Docker-Labels sind unveränderlich, also
+trägt ein Container, der aus dem Pool an einen Nutzer gegangen ist, bis zum
+Ende `role=warm`. Deshalb entscheidet auch die Adoption nach einem Neustart am
+Namen und nicht am Label.
+
 Die drei Pfade `api/v1/status`, `api/v1/terminals` und `api/v1/policies` sind
 genau die, die Open WebUI selbst nicht weiterleitet — über eine Open-WebUI-
 Sitzung sind sie also nicht erreichbar, auch wenn der Proxy sonst sichtbar ist.
@@ -375,5 +388,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 228 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 236 Prüfungen,
 alle grün.
