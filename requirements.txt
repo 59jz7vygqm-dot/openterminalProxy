@@ -1,0 +1,8 @@
+# The proxy itself. No Docker SDK: it speaks the Engine API over the socket
+# directly (otproxy/dockerapi.py), which keeps the dependency list at four.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.27
+httpx>=0.27,<1
+# 14 is where extra_headers became additional_headers, which the terminal
+# socket needs in order to forward X-User-Id upstream.
+websockets>=14

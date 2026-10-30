@@ -1,0 +1,91 @@
+# Per-user Open Terminal sandboxes for Open WebUI.
+#
+#   cp .env.example .env                        # then fill in OTPROXY_API_KEY
+#   docker compose up -d --build
+#
+# Open WebUI reaches the proxy at http://otproxy:8800 over the network below.
+# If Open WebUI already runs in another compose project, attach that project to
+# this network instead of starting the one here:
+#
+#   networks:
+#     openterminal-frontend:
+#       external: true
+#
+# The sandbox networks are not declared here: the proxy creates one internal
+# /29 per user at runtime, out of OTPROXY_NET_SUPERNET, and removes it again
+# with the sandbox.
+name: openterminal
+
+services:
+  otproxy:
+    build: .
+    image: openterminal-proxy:latest
+    # Fixed name, and the same value in OTPROXY_SELF_CONTAINER: the proxy has to
+    # attach itself to each sandbox network, so it must know which container it
+    # is. Without this it falls back to the hostname and /proc/self/mountinfo.
+    container_name: otproxy
+    # Not unless-stopped: a configuration error would otherwise restart for ever.
+    restart: on-failure:5
+
+    environment:
+      OTPROXY_SELF_CONTAINER: otproxy
+      OTPROXY_API_KEY: "${OTPROXY_API_KEY:?set OTPROXY_API_KEY in .env (openssl rand -base64 36)}"
+      OTPROXY_ADMIN_KEY: "${OTPROXY_ADMIN_KEY:-}"
+      OTPROXY_IMAGE: "${OTPROXY_IMAGE:-ghcr.io/open-webui/open-terminal:latest}"
+      OTPROXY_MEMORY: "${OTPROXY_MEMORY:-2g}"
+      OTPROXY_CPUS: "${OTPROXY_CPUS:-1.0}"
+      OTPROXY_PIDS_LIMIT: "${OTPROXY_PIDS_LIMIT:-512}"
+      OTPROXY_TMPFS_SIZE: "${OTPROXY_TMPFS_SIZE:-512m}"
+      OTPROXY_MAX_SANDBOXES: "${OTPROXY_MAX_SANDBOXES:-50}"
+      OTPROXY_POOL_SIZE: "${OTPROXY_POOL_SIZE:-1}"
+      OTPROXY_IDLE_TIMEOUT: "${OTPROXY_IDLE_TIMEOUT:-900}"
+      OTPROXY_MAX_LIFETIME: "${OTPROXY_MAX_LIFETIME:-86400}"
+      OTPROXY_NET_SUPERNET: "${OTPROXY_NET_SUPERNET:-10.88.0.0/16}"
+      OTPROXY_PERSIST_HOME: "${OTPROXY_PERSIST_HOME:-false}"
+      OTPROXY_LOG_FORMAT: "${OTPROXY_LOG_FORMAT:-text}"
+
+    volumes:
+      # This is the one real privilege in the whole setup: whoever can use this
+      # socket owns the host. Nothing else is mounted, and the proxy runs
+      # unprivileged, read-only and without capabilities to keep the blast
+      # radius of a bug in it as small as it can be made.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The socket's group on the host (stat -c '%g' /var/run/docker.sock), so the
+    # proxy does not have to run as root to use it.
+    group_add:
+      - "${DOCKER_GID:-999}"
+
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,nosuid,nodev
+
+    # No published port on purpose: only Open WebUI needs to reach it, and it
+    # does so over the network below. Publish one only if Open WebUI runs on
+    # another host, and then bind it to that interface, not to 0.0.0.0.
+    # ports:
+    #   - "127.0.0.1:8800:8800"
+
+    networks:
+      - frontend
+
+  # Only started with --profile with-openwebui, for a complete stack from zero.
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    profiles: ["with-openwebui"]
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "${OPENWEBUI_PORT:-3000}:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+    networks:
+      - frontend
+
+networks:
+  frontend:
+    name: openterminal-frontend
+
+volumes:
+  open-webui-data:

@@ -1,0 +1,13 @@
+# Keys live here: OTPROXY_API_KEY, OTPROXY_ADMIN_KEY, DOCKER_GID
+.env
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# built by tests/test_docker.py
+fakeot
+*.tar
