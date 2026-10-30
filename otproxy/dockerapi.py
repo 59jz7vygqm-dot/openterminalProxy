@@ -198,7 +198,9 @@ class DockerClient:
                 expect_json=False,
             )
         except DockerError as exc:
-            if not exc.is_not_found:
+            # Gone, or already on its way out because two cleanup paths met:
+            # either way the container is not there any more.
+            if not (exc.is_not_found or (exc.is_conflict and "already in progress" in exc.message)):
                 raise
 
     async def rename_container(self, container: str, name: str) -> None:

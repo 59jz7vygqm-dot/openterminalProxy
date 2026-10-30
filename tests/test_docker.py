@@ -275,6 +275,29 @@ async def main() -> int:
                 response = await probe.get(f"{claimed.base_url}/health")
                 check("and it answers through its new address", response.status_code == 200)
 
+                # A restart must keep the pool, too: a warm container has no
+                # address until it is claimed, and requiring one here used to
+                # discard the whole pool on every restart.
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline and not warm_manager._warm:
+                    await asyncio.sleep(0.2)
+                pool_before = [item.container_id for item in warm_manager._warm]
+                check("the pool refills after a hand-over", bool(pool_before))
+                if pool_before:
+                    restarted_pool = SandboxManager(
+                        warm_settings, DockerSandboxBackend(warm_settings, DockerClient())
+                    )
+                    await restarted_pool.start()
+                    try:
+                        check("a restart keeps the warm container it found",
+                              any(item.container_id in pool_before for item in restarted_pool._warm),
+                              f"pool after restart: {[i.name for i in restarted_pool._warm]}")
+                    finally:
+                        for task in restarted_pool._tasks:
+                            task.cancel()
+                        await asyncio.sleep(0)
+                        await restarted_pool.backend.docker.close()
+
                 # The regression that matters: a claimed container keeps the
                 # role=warm label it was created with (Docker labels are
                 # immutable), so a restart that trusted that label would put a

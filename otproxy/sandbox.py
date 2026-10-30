@@ -602,7 +602,12 @@ class DockerSandboxBackend:
             created=created,
             last_used=time.time(),
         )
-        if not api_key or not ip:
+        # A warm container has no address on purpose -- it sits in network mode
+        # "none" until somebody claims it -- so only a user's sandbox is
+        # required to have one.  Demanding an address here threw the whole warm
+        # pool away on every restart and built it again.
+        needs_address = classify_name(name, self.settings.name_prefix) != "warm"
+        if not api_key or (needs_address and not ip):
             logger.warning("container %s is unusable (no key or no address), removing it", name)
             await self.docker.remove_container(info["Id"])
             return None
