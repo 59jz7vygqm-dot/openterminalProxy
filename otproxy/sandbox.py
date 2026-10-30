@@ -261,11 +261,24 @@ class DockerSandboxBackend:
         await self._join(name)
         return name
 
-    async def _join(self, name: str) -> None:
-        """Attach the proxy itself, when it runs in a container."""
+    async def join_network(self, name: str) -> bool:
+        """Attach the proxy itself to *name*, when it runs in a container.
+
+        Needed on its own, not only when a network is created: a sandbox
+        network outlives the proxy container.  Recreating the proxy -- a
+        `docker compose up -d` after any change -- removes its endpoint from
+        every sandbox network, and an adopted sandbox is then unreachable to it
+        even though the container is healthy and still answering the old
+        endpoint's address.  Returns whether anything had to be joined.
+        """
         self_container = await self.resolve_self()
-        if self_container:
-            await self.docker.connect_network(name, self_container)
+        if not self_container or name in ("", "none"):
+            return False
+        await self.docker.connect_network(name, self_container)
+        return True
+
+    async def _join(self, name: str) -> None:
+        await self.join_network(name)
 
     async def _subnets_in_use(self) -> List[str]:
         """Every subnet this daemon knows, ours or not."""

@@ -229,6 +229,60 @@ async def main() -> int:
         finally:
             await second.backend.docker.close()
 
+        # --- a recreated proxy has to rejoin the networks it inherits ------
+        # What broke live: `docker compose up -d` replaces the proxy container,
+        # which takes its endpoint on every sandbox network with it. The new
+        # proxy adopted the sandboxes, read their addresses, and then could not
+        # reach any of them -- 90 seconds of nothing per request, while the
+        # containers were healthy and still answering the old endpoint.
+        # A container stands in for the proxy here, since the test itself runs
+        # on the host, where joining is not needed and the bug cannot show.
+        stand_in = f"{PREFIX}-selfproxy"
+        await client.remove_container(stand_in)
+        # On the default bridge, like the real proxy sits on its frontend
+        # network: the daemon refuses to add a second network to a container in
+        # private ("none") mode.
+        stand_in_id = await client.create_container(
+            stand_in, {"Image": IMAGE, "HostConfig": {"NetworkMode": "bridge"}}
+        )
+        await client.start_container(stand_in_id)
+        os.environ["OTPROXY_SELF_CONTAINER"] = stand_in
+        try:
+            joined = SandboxManager(settings, DockerSandboxBackend(settings, client))
+            await joined.start()
+            try:
+                ivy = await joined.acquire(Scope("ivy"))
+                network = await client.inspect_network(ivy.network)
+                check("creating a network attaches the proxy to it",
+                      stand_in_id in (network.get("Containers") or {}))
+            finally:
+                for task in joined._tasks:
+                    task.cancel()
+
+            # The proxy container is replaced: its endpoint goes with it.
+            await client.disconnect_network(ivy.network, stand_in_id)
+            network = await client.inspect_network(ivy.network)
+            check("replacing the proxy takes its endpoint with it",
+                  stand_in_id not in (network.get("Containers") or {}))
+
+            recreated = SandboxManager(settings, DockerSandboxBackend(settings, DockerClient()))
+            await recreated.start()
+            try:
+                network = await client.inspect_network(ivy.network)
+                check("a recreated proxy rejoins the network of a sandbox it adopts",
+                      stand_in_id in (network.get("Containers") or {}),
+                      "without this every existing sandbox is unreachable after a restart")
+                same = await recreated.acquire(Scope("ivy"))
+                check("and the sandbox answers again", same.ready and same.container_id == ivy.container_id)
+            finally:
+                for task in recreated._tasks:
+                    task.cancel()
+                await recreated._destroy_quietly(ivy)
+                await recreated.backend.docker.close()
+        finally:
+            os.environ.pop("OTPROXY_SELF_CONTAINER", None)
+            await client.remove_container(stand_in_id)
+
         # --- capacity ----------------------------------------------------
         full = settings_for(OTPROXY_MAX_SANDBOXES="2", OTPROXY_EVICT_MIN_IDLE="3600")
         crowded = SandboxManager(full, DockerSandboxBackend(full, client))

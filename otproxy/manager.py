@@ -106,6 +106,19 @@ class SandboxManager:
         self._warm = warm
         if adopted or warm:
             logger.info("adopted %d running sandbox(es) and %d warm container(s)", len(adopted), len(warm))
+        # Adopting a sandbox is not enough to be able to reach it: a recreated
+        # proxy container has no endpoint on the networks of the sandboxes it
+        # just inherited, so it has to join them again before the first request
+        # arrives.
+        rejoined = 0
+        for network in {sandbox.network for sandbox in adopted}:
+            try:
+                if await self.backend.join_network(network):
+                    rejoined += 1
+            except Exception as exc:  # noqa: BLE001 -- one bad network must not stop startup
+                logger.warning("could not rejoin network %s: %s", network, exc)
+        if rejoined:
+            logger.info("rejoined %d sandbox network(s)", rejoined)
 
         if self.settings.network_mode == "shared":
             await self.backend.ensure_network(None, self.settings.shared_network)
@@ -252,7 +265,14 @@ class SandboxManager:
                     )
                     return
             except httpx.HTTPError:
-                pass
+                if attempt == 1:
+                    # Belt and braces: a network created by another replica, or
+                    # one this process has never seen, has to be joined before
+                    # anything on it answers.
+                    try:
+                        await self.backend.join_network(sandbox.network)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("could not join %s: %s", sandbox.network, exc)
             if attempt % 10 == 0 and not await self._still_running(sandbox):
                 break
             await asyncio.sleep(0.25)

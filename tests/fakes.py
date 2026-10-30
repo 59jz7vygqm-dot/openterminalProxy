@@ -254,6 +254,7 @@ class FakeBackend:
         self.destroyed: List[Sandbox] = []
         self.claims: List[Sandbox] = []
         self.networks: List[str] = []
+        self.joined: List[str] = []
         self._counter = 0
         self.owner_label = "fake/owned=true"
         self.fail_next_create: Optional[Exception] = None
@@ -268,6 +269,10 @@ class FakeBackend:
         if name not in self.networks:
             self.networks.append(name)
         return name
+
+    async def join_network(self, name: str) -> bool:
+        self.joined.append(name)
+        return False
 
     async def network_gateway(self, name: str) -> str:
         return "10.88.0.1"

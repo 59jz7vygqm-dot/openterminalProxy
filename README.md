@@ -303,6 +303,13 @@ Sitzung sind sie also nicht erreichbar, auch wenn der Proxy sonst sichtbar ist.
 Zusätzlich brauchen sie `OTPROXY_ADMIN_KEY`, und ohne diesen Schlüssel
 antworten sie mit 404.
 
+Ein Neustart des Proxys (`docker compose up -d` nach jeder Änderung) nimmt
+laufende Sandboxes mit: der neue Prozess adoptiert sie und hängt sich wieder in
+deren Netze, weil der ersetzte Container seinen Anschluss daran verloren hat —
+ohne das wäre jede bestehende Sandbox danach unerreichbar. Was ein Neustart
+dagegen verschiebt: die Leerlauf-Uhr beginnt für adoptierte Sandboxes neu, sie
+leben also bis zu eine Leerlaufperiode länger.
+
 Im Log stehen Containerstarts, Übergaben aus dem Pool, Räumungen,
 Kapazitätsgrenzen und die `ISOLATION:`-Zeilen. Schlüssel stehen nicht im Log —
 weder der von Open WebUI noch die der Container.
@@ -418,5 +425,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 242 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 246 Prüfungen,
 alle grün.
