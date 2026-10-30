@@ -197,6 +197,8 @@ def test_identity() -> None:
           classify_name("other-w-0123456789ab", "otsbx") == "unknown")
     check("a sandbox name is never mistaken for warm",
           classify_name(names.container, "otsbx") != "warm")
+    check("the schema-reading throwaway is not pooled either",
+          classify_name("otsbx-i-0123456789ab", "otsbx") == "sandbox")
 
 
 def test_network_pool() -> None:

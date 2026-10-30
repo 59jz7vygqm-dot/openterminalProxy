@@ -22,6 +22,7 @@ of orphaning them -- and two replicas on one host converge on the same set.
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -472,9 +473,16 @@ class SandboxManager:
         for sandbox in self._sandboxes.values():
             if sandbox.ready:
                 return sandbox, False
+        logger.info("starting a throwaway sandbox to read the image's own schema")
         async with self._global_lock:
             await self._make_room()
-            sandbox = await self.backend.create(scope=Scope("otproxy-introspection"), policy=None)
+            sandbox = await self.backend.create(
+                scope=Scope("otproxy-introspection"),
+                policy=None,
+                # A name of its own, so this container is not mistaken for a
+                # user's in a log or a container listing.
+                name=f"{self.settings.name_prefix}-i-{secrets.token_hex(6)}",
+            )
         try:
             await self._wait_ready(sandbox)
         except Exception:

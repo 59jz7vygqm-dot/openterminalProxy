@@ -213,16 +213,22 @@ class DockerSandboxBackend:
     # ------------------------------------------------------------------
 
     async def ensure_network(self, scope: Optional[Scope], name: str, policy_id: str = "") -> str:
-        """Create the sandbox network if it is missing, and join it ourselves."""
+        """Create the sandbox network if it is missing, and join it ourselves.
+
+        Two processes -- two proxy replicas, or two first requests at once --
+        can read the same free block out of the supernet and both try to use
+        it.  The daemon settles that: it refuses an overlapping pool outright
+        ("Pool overlaps with other one on this address space", verified against
+        dockerd 29), so the loser simply takes the next block instead of
+        failing the user's request.
+        """
         existing = await self.docker.inspect_network(name)
-        if existing is None:
-            taken = [
-                config.get("Subnet", "")
-                for network in await self.docker.list_networks()
-                for config in ((network.get("IPAM") or {}).get("Config") or [])
-                if config.get("Subnet")
-            ]
-            subnet = self.pool.allocate(taken)
+        if existing is not None:
+            await self._join(name)
+            return name
+
+        for attempt in range(1, 6):
+            subnet = self.pool.allocate(await self._subnets_in_use())
             spec = {
                 "Driver": "bridge",
                 "Internal": True,          # the whole point: no route off the bridge
@@ -236,14 +242,39 @@ class DockerSandboxBackend:
             try:
                 await self.docker.create_network(name, spec)
                 logger.info("created network %s (%s, internal)", name, subnet)
+                break
             except DockerError as exc:
-                # Another replica, or a racing request, got there first.
-                if not (exc.is_conflict or "already exists" in exc.message):
-                    raise
+                # Another replica, or a racing request for the same user, got
+                # there first: that network is the one to use.
+                if exc.is_conflict or "already exists" in exc.message:
+                    break
+                if _is_pool_taken(exc):
+                    logger.info("subnet %s was taken a moment ago, trying the next block", subnet)
+                    continue
+                raise
+        else:
+            raise SandboxError(
+                f"could not claim a free subnet for {name} after 5 attempts: "
+                "something else is allocating out of OTPROXY_NET_SUPERNET"
+            )
+
+        await self._join(name)
+        return name
+
+    async def _join(self, name: str) -> None:
+        """Attach the proxy itself, when it runs in a container."""
         self_container = await self.resolve_self()
         if self_container:
             await self.docker.connect_network(name, self_container)
-        return name
+
+    async def _subnets_in_use(self) -> List[str]:
+        """Every subnet this daemon knows, ours or not."""
+        return [
+            config.get("Subnet", "")
+            for network in await self.docker.list_networks()
+            for config in ((network.get("IPAM") or {}).get("Config") or [])
+            if config.get("Subnet")
+        ]
 
     async def network_gateway(self, name: str) -> Optional[str]:
         network = await self.docker.inspect_network(name)
@@ -661,6 +692,12 @@ def _key_from_name(name: str, prefix: str) -> str:
     return match.group(1) if match else ""
 
 
+def _is_pool_taken(exc: DockerError) -> bool:
+    """Whether the daemon refused a subnet because something else holds it."""
+    message = exc.message.lower()
+    return "overlaps" in message or "invalid pool request" in message
+
+
 def classify_name(name: str, prefix: str) -> str:
     """Say what a container is from its name: ``sandbox``, ``warm`` or ``unknown``.
 
@@ -668,11 +705,16 @@ def classify_name(name: str, prefix: str) -> str:
     role label, because a claimed warm container keeps the label it was created
     with, and a sandbox mistaken for a free warm container would be handed to
     somebody else complete with the previous user's files.
+
+    ``-i-`` is the throwaway that reads the image's own OpenAPI schema; it is
+    never pooled, and a leftover one is reaped like any idle sandbox.
     """
     if _key_from_name(name, prefix):
         return "sandbox"
     if re.fullmatch(rf"{re.escape(prefix)}-w-[0-9a-f]{{12}}", name):
         return "warm"
+    if re.fullmatch(rf"{re.escape(prefix)}-i-[0-9a-f]{{12}}", name):
+        return "sandbox"
     return "unknown"
 
 

@@ -244,6 +244,42 @@ async def main() -> int:
             for task in crowded._tasks:
                 task.cancel()
 
+        # --- two allocators, one free block -------------------------------
+        # Two processes can read the same free block out of the supernet. The
+        # daemon refuses the second one ("Pool overlaps with other one on this
+        # address space"), and the proxy has to answer that by taking the next
+        # block -- not by failing the user's request.
+        race_backend = DockerSandboxBackend(settings, client)
+        decoy = f"{PREFIX}-decoy"
+        original_create = race_backend.docker.create_network
+        raced = {"subnet": ""}
+
+        async def create_with_a_rival(name, spec):
+            if not raced["subnet"]:
+                raced["subnet"] = spec["IPAM"]["Config"][0]["Subnet"]
+                # Takes the very block the allocator just picked, between its
+                # look at the daemon and its own create.
+                await original_create(decoy, {
+                    "Driver": "bridge", "Internal": True,
+                    "IPAM": {"Driver": "default", "Config": [{"Subnet": raced["subnet"]}]},
+                })
+            return await original_create(name, spec)
+
+        race_backend.docker.create_network = create_with_a_rival
+        try:
+            raced_name = await race_backend.ensure_network(Scope("heidi"), f"{PREFIX}-n-raced")
+            check("losing the race still produces a network", raced_name == f"{PREFIX}-n-raced")
+            ours = await client.inspect_network(raced_name)
+            our_subnet = (ours["IPAM"]["Config"] or [{}])[0].get("Subnet")
+            check("on the next free block, not the taken one",
+                  our_subnet and our_subnet != raced["subnet"], f"{our_subnet} vs {raced['subnet']}")
+            check("still inside the configured supernet",
+                  str(our_subnet).startswith("10.99."), str(our_subnet))
+        finally:
+            race_backend.docker.create_network = original_create
+            await client.remove_network(f"{PREFIX}-n-raced")
+            await client.remove_network(decoy)
+
         # --- the warm pool ------------------------------------------------
         warm_settings = settings_for(OTPROXY_POOL_SIZE="1", OTPROXY_REAP_INTERVAL="1")
         warm_manager = SandboxManager(warm_settings, DockerSandboxBackend(warm_settings, client))

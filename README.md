@@ -284,8 +284,9 @@ curl -s -H "Authorization: Bearer $OTPROXY_ADMIN_KEY" http://localhost:8800/metr
 ```
 
 Von außerhalb des Proxys, direkt am Daemon — das Label ist die Zugehörigkeit,
-der Name sagt, was ein Container ist (`-c-` gehört einem Nutzer, `-w-` ist aus
-dem Pool):
+der Name sagt, was ein Container ist: `-c-` gehört einem Nutzer, `-w-` wartet
+im Pool, `-i-` ist der Wegwerf-Container, der einmal die OpenAPI-Beschreibung
+aus dem Image liest und danach samt Netz verschwindet:
 
 ```bash
 docker ps --filter 'label=sh.openterminal.proxy/owned=true' --format '{{.Names}}	{{.Status}}'
@@ -417,5 +418,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 238 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 242 Prüfungen,
 alle grün.
