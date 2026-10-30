@@ -154,6 +154,35 @@ dauert entsprechend länger.
 
 ---
 
+### Open WebUI auf einer anderen Maschine
+
+Dann braucht der Proxy einen veröffentlichten Port. Nicht in
+`docker-compose.yml` hineineditieren — das kollidiert beim nächsten `git pull`,
+und eine falsche Einrückung kostet mehr Zeit als die Sache wert ist. Compose
+liest eine Override-Datei automatisch dazu:
+
+```bash
+cat > docker-compose.override.yml <<'YML'
+services:
+  otproxy:
+    ports:
+      - "172.16.3.50:8800:8800"
+YML
+```
+
+Die private Adresse der VM einsetzen, nicht `0.0.0.0`. Danach:
+
+```bash
+docker compose config >/dev/null && echo ok
+docker compose up -d
+ss -ltn | grep 8800
+```
+
+In Open WebUI ist die URL dann `http://<diese Adresse>:8800`. Der Key geht damit
+übers Netz: nur über eines, dem du traust, oder mit TLS davor. Für die
+Sandboxes ändert der Port nichts — die Host-Regel verwirft Verkehr aus dem
+Sandbox-Bereich an den Host, und der Proxy weist ihn zusätzlich mit 403 ab.
+
 ## Welches Image
 
 | Image | Größe | Für | Nötige Einstellungen |

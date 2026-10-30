@@ -1,6 +1,9 @@
 # Keys live here: OTPROXY_API_KEY, OTPROXY_ADMIN_KEY, DOCKER_GID
 .env
 
+# Local deployment detail: published ports, extra mounts
+docker-compose.override.yml
+
 __pycache__/
 *.py[cod]
 .venv/
