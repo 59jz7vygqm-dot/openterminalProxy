@@ -202,10 +202,14 @@ geteilten Sandbox. Das ist Absicht: ohne Identität keine Zuordnung.
 Header pro Verbindung, mit Platzhaltern, und wendet sie sowohl auf MCP- als
 auch auf OpenAPI-Verbindungen an. Trag in der Verbindung ein:
 
-| Header | Wert |
-|---|---|
-| `X-User-Id` | `{{USER_ID}}` |
-| `X-Session-Id` | `{{CHAT_ID}}` (optional, für das Arbeitsverzeichnis pro Chat) |
+```json
+{
+  "X-User-Id": "{{USER_ID}}",
+  "X-Session-Id": "{{CHAT_ID}}"
+}
+```
+
+`X-Session-Id` ist optional und dient dem Arbeitsverzeichnis pro Chat.
 
 Damit braucht es weder `ENABLE_FORWARD_USER_INFO_HEADERS` noch einen
 bestimmten Verbindungstyp.
@@ -226,6 +230,34 @@ Wären sie an, würde die Sitzungs-Cookie des Nutzers an einen Dienst gehen, der
 sie nicht verwendet — deshalb entfernt der Proxy den `Cookie`-Header, bevor er
 eine Anfrage an den Container weitergibt. In einem Container, in dem fremder
 Code läuft, hat eine Open-WebUI-Sitzung nichts zu suchen.
+
+### Nur der Agent, kein Nutzer-Terminal
+
+Wer will, dass das Modell rechnet und Dateien schreibt, aber **kein Mensch**
+eine Shell im Browser bekommt und im Dateibrowser herumsieht, hängt den Proxy
+als OpenAPI-Verbindung ein (dann gibt es die Oberfläche dafür gar nicht) — und
+schaltet es zusätzlich in der Sandbox selbst ab, damit es nicht an einer
+Einstellung in Open WebUI hängt:
+
+```bash
+OTPROXY_SANDBOX_ENV={"OPEN_TERMINAL_ENABLE_TERMINAL":"false","OPEN_TERMINAL_ENABLE_NOTEBOOKS":"false"}
+```
+
+Open Terminal registriert seine PTY-Routen und den WebSocket nur, wenn
+`OPEN_TERMINAL_ENABLE_TERMINAL` wahr ist. Mit `false` existieren sie nicht —
+damit verschwinden auch `read_user_terminal` und `send_user_terminal_input` aus
+`/openapi.json`, das Modell sieht sie also nicht und versucht sie nicht. Was
+bleibt: `run_command`, die Datei- und Suchwerkzeuge, alles was ein Agent
+braucht.
+
+Ohne das würde ein Modell, das die Werkzeuge in der Beschreibung sieht, die
+Nutzer-Shell lesen wollen und `404 No connected user shell` bekommen — und dem
+Nutzer erzählen, das Terminal sei kaputt.
+
+Die Alternative, wenn das Modell die Werkzeuge nur nicht *benutzen* soll: im
+Feld „Filterliste für Funktionsnamen" der Verbindung
+`!read_user_terminal,!send_user_terminal_input` eintragen. Das ist eine
+Einstellung in der Oberfläche; die oben ist eine Eigenschaft der Sandbox.
 
 ## Welches Image
 

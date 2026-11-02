@@ -27,6 +27,12 @@ services:
     # Not unless-stopped: a configuration error would otherwise restart for ever.
     restart: on-failure:5
 
+    # Everything OTPROXY_* from .env reaches the proxy, not only the handful
+    # spelled out below: a setting that quietly does not arrive is worse than
+    # one that is missing.
+    env_file:
+      - .env
+
     environment:
       OTPROXY_SELF_CONTAINER: otproxy
       OTPROXY_API_KEY: "${OTPROXY_API_KEY:?set OTPROXY_API_KEY in .env (openssl rand -base64 36)}"
