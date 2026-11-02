@@ -16,6 +16,7 @@ Routes fall into three groups:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import time
 from contextlib import asynccontextmanager
@@ -33,6 +34,11 @@ from .sandbox import Sandbox, SandboxError
 logger = log.get("app")
 
 ALL_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+#: How often an open terminal socket counts as activity.  A shell somebody is
+#: reading sends nothing, and without this the reaper would remove the container
+#: under it after OTPROXY_IDLE_TIMEOUT.  Lowered by the tests.
+WS_KEEPALIVE_SECONDS = 15.0
 
 
 def create_app(settings: Optional[config.Settings] = None, manager: Optional[SandboxManager] = None) -> FastAPI:
@@ -319,7 +325,18 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         if ws.url.query:
             url += f"?{ws.url.query}"
         sandbox.touch()
-        await forwarder.pump(ws, url, api_key=sandbox.api_key, headers=headers, chat_id=chat_id)
+
+        async def keep_alive() -> None:
+            """An open shell is a user, even while nothing is typed."""
+            while True:
+                await asyncio.sleep(WS_KEEPALIVE_SECONDS)
+                sandbox.touch()
+
+        heartbeat = asyncio.create_task(keep_alive(), name="otproxy-ws-keepalive")
+        try:
+            await forwarder.pump(ws, url, api_key=sandbox.api_key, headers=headers, chat_id=chat_id)
+        finally:
+            heartbeat.cancel()
 
     @app.websocket("/api/terminals/{session_id}")
     async def ws_terminal(ws: WebSocket, session_id: str) -> None:

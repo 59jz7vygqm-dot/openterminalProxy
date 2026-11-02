@@ -204,6 +204,30 @@ async def test_websocket(h: Harness) -> None:
         else:
             check("a wrong key closes the socket with 4001", False, "socket stayed open")
 
+    # A shell somebody is only reading sends nothing. Without a heartbeat the
+    # reaper would take the container away under the open socket.
+    import otproxy.app as app_module
+
+    previous = app_module.WS_KEEPALIVE_SECONDS
+    app_module.WS_KEEPALIVE_SECONDS = 0.2
+    try:
+        async with websockets.connect(url, additional_headers={"X-User-Id": "user-idle"}) as ws:
+            await ws.send(json.dumps({"type": "auth", "token": KEY}))
+            await asyncio.wait_for(ws.recv(), timeout=10)
+            sandbox = [item for item in h.backend.created if item.scope and item.scope.user_id == "user-idle"]
+            check("the socket got a sandbox", len(sandbox) == 1)
+            if sandbox:
+                sandbox[0].last_used = time.time() - 10_000
+                await asyncio.sleep(0.6)
+                check("an open socket keeps the sandbox alive without any traffic",
+                      sandbox[0].idle_seconds < 5, f"idle {sandbox[0].idle_seconds:.0f}s")
+                stale = sandbox[0].last_used
+        await asyncio.sleep(0.5)
+        if sandbox:
+            check("and stops counting once it closes", sandbox[0].last_used == stale)
+    finally:
+        app_module.WS_KEEPALIVE_SECONDS = previous
+
     async with websockets.connect(f"{h.server.ws_base}/api/terminals/s2") as ws:
         await ws.send(json.dumps({"type": "auth", "token": KEY}))
         try:

@@ -303,6 +303,24 @@ Sitzung sind sie also nicht erreichbar, auch wenn der Proxy sonst sichtbar ist.
 Zusätzlich brauchen sie `OTPROXY_ADMIN_KEY`, und ohne diesen Schlüssel
 antworten sie mit 404.
 
+### Wie lange eine Sandbox lebt
+
+| Ereignis | Wirkung |
+|---|---|
+| Jeder Aufruf durch Open WebUI (Werkzeugaufruf, Dateibrowser, `/files/cwd`) | setzt die Leerlauf-Uhr zurück |
+| Offenes Terminal-Fenster | zählt alle 15 s als Aktivität, auch wenn niemand tippt |
+| `OTPROXY_IDLE_TIMEOUT` ohne beides (Standard 900 s) | Container und Netz werden entfernt |
+| `OTPROXY_MAX_LIFETIME` (Standard 86400 s) | Ende, unabhängig von Aktivität |
+| Decke erreicht (`OTPROXY_MAX_SANDBOXES`) | der am längsten untätige Container ab `OTPROXY_EVICT_MIN_IDLE` wird geräumt; ist keiner untätig, antwortet der Proxy 503 |
+| Neustart des Proxys | Sandbox bleibt, Leerlauf-Uhr beginnt neu |
+
+Was ein Chat in Open WebUI gerade nicht offen hält: ein Tab, in dem niemand den
+Agenten arbeiten lässt. Ohne Werkzeugaufrufe und ohne offenes Terminal ist die
+Sandbox nach `IDLE_TIMEOUT` weg — und mit ihr alles, was nicht in einem Volume
+liegt (`OTPROXY_PERSIST_HOME`). Der nächste Aufruf bekommt eine neue, leere;
+bei gemessenen 1–2 s Kaltstart merkt der Nutzer davon nichts außer den
+verlorenen Dateien.
+
 Ein Neustart des Proxys (`docker compose up -d` nach jeder Änderung) nimmt
 laufende Sandboxes mit: der neue Prozess adoptiert sie und hängt sich wieder in
 deren Netze, weil der ersetzte Container seinen Anschluss daran verloren hat —
@@ -425,5 +443,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 246 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 249 Prüfungen,
 alle grün.
