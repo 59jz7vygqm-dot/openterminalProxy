@@ -154,6 +154,11 @@ class HttpForwarder:
             background=BackgroundTask(response.aclose),
         )
 
+    async def fetch(self, url: str, api_key: str) -> httpx.Response:
+        """Open a streamed GET against a sandbox.  The caller closes it."""
+        request = self._client.build_request("GET", url, headers={"Authorization": f"Bearer {api_key}"})
+        return await self._client.send(request, stream=True)
+
     async def _limited(self, request: Request) -> AsyncIterator[bytes]:
         seen = 0
         async for chunk in request.stream():

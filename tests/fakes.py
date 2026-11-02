@@ -87,6 +87,14 @@ class FakeTerminal:
                     "cookie": headers.get("cookie", ""),
                 },
             )
+        if path == "/files/display":
+            wanted = dict(_pairs(scope["query_string"].decode())).get("path", "")
+            return await _json(send, 200, {"path": wanted, "exists": "missing" not in wanted})
+        if path == "/files/view":
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"application/vnd.openxmlformats-officedocument"
+                                                      b".wordprocessingml.document")]})
+            return await send({"type": "http.response.body", "body": b"PK\x03\x04-fake-docx-bytes"})
         if path == "/files/upload":
             return await _json(send, 200, {"received": len(body)})
         if path == "/big":
@@ -129,10 +137,13 @@ class FakeTerminal:
 
 
 def _pairs(query: str):
+    """Query pairs, decoded -- the real server decodes them too."""
+    from urllib.parse import unquote_plus
+
     for item in query.split("&"):
         if "=" in item:
             key, _, value = item.partition("=")
-            yield key, value
+            yield key, unquote_plus(value)
 
 
 async def _json(send, status: int, payload: Dict[str, Any]) -> None:

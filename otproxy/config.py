@@ -201,6 +201,11 @@ class Settings:
     scope_by_context: bool
     policies: Dict[str, Policy]
 
+    # --- handing files to the user --------------------------------------
+    public_url: str
+    download_ttl: float
+    download_secret: str
+
     # --- proxying --------------------------------------------------------
     request_timeout: float
     connect_timeout: float
@@ -219,6 +224,11 @@ class Settings:
     log_json: bool
 
     # ----------------------------------------------------------------
+    @property
+    def sharing_enabled(self) -> bool:
+        """Handing out files needs a URL the user's browser can reach."""
+        return bool(self.public_url)
+
     def policy(self, policy_id: Optional[str]) -> Optional[Policy]:
         if not policy_id:
             return None
@@ -356,6 +366,11 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
         stop_on_shutdown=_bool("STOP_ON_SHUTDOWN", False),
         scope_by_context=_bool("SCOPE_BY_CONTEXT", True),
         policies=policies,
+        public_url=_str("PUBLIC_URL").rstrip("/"),
+        download_ttl=_float("DOWNLOAD_TTL", 600.0, minimum=30.0),
+        # Derived from the API key by default: one secret fewer to manage, and
+        # rotating the key invalidates outstanding links, which is correct.
+        download_secret=_str("DOWNLOAD_SECRET") or ("derive:" + keys[0]),
         request_timeout=_float("REQUEST_TIMEOUT", 300.0, minimum=1.0),
         connect_timeout=_float("CONNECT_TIMEOUT", 5.0, minimum=0.1),
         max_body_bytes=parse_size(_str("MAX_BODY", "1g"), what="OTPROXY_MAX_BODY"),

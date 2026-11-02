@@ -346,6 +346,11 @@ class SandboxManager:
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not remove %s: %s", sandbox.name, exc)
 
+    def lookup(self, key: str) -> Optional[Sandbox]:
+        """The sandbox for *key* if one is running.  Never starts one."""
+        sandbox = self._sandboxes.get(key)
+        return sandbox if sandbox is not None and sandbox.ready else None
+
     async def release(self, key: str) -> bool:
         """Remove one sandbox by key.  Used by the admin API."""
         async with self._lock(key):

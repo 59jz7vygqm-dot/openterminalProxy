@@ -233,6 +233,38 @@ Code läuft, hat eine Open-WebUI-Sitzung nichts zu suchen.
 
 ### Dateien an den Nutzer ausliefern
 
+**Der Weg, der auf jedem Verbindungstyp funktioniert:** setze
+
+```bash
+OTPROXY_PUBLIC_URL=http://172.16.3.50:8800
+```
+
+auf die Adresse, unter der der **Browser des Nutzers** den Proxy erreicht.
+Damit erscheint im Werkzeugverzeichnis ein zusätzliches Werkzeug `share_file`,
+das der Proxy selbst beantwortet: es macht aus einer Datei in der Sandbox des
+Aufrufers eine signierte, kurzlebige URL und gibt dem Modell das Markdown
+dazu. Das Modell schreibt es in seine Antwort, der Browser lädt die Datei beim
+Proxy — ein Bild erscheint im Chat, alles andere als Download.
+
+Was so eine URL ist: ein HMAC über Sandbox, Pfad und Ablaufzeit. Nichts wird
+gespeichert; sie gilt, weil sie verifiziert, und sie gilt nicht mehr nach
+`OTPROXY_DOWNLOAD_TTL` (Standard 600 s), sobald die Sandbox weg ist oder sobald
+der API-Key gewechselt wird, von dem das Geheimnis abgeleitet ist. Der Preis:
+wer die URL hat, bekommt diese eine Datei, ohne Anmeldung, bis sie abläuft. Für
+Dokumente aus einer Chat-Antwort ist das vertretbar; für etwas Vertrauliches
+setze die TTL niedrig oder lass es aus (ohne `OTPROXY_PUBLIC_URL` ist das
+Werkzeug nicht vorhanden).
+
+In Veras System-Prompt gehört dann ein Satz: *„Du kannst Dateien nicht selbst
+anzeigen. Wenn der Nutzer eine Datei bekommen soll, rufe `share_file` auf und
+übernimm das zurückgegebene Markdown wörtlich in deine Antwort."*
+
+Nach dem Einschalten die Verbindung in Open WebUI einmal neu speichern — die
+Werkzeugliste wird dort zwischengespeichert, und `share_file` erscheint erst
+beim nächsten Lesen von `/openapi.json`.
+
+#### Warum `display_file` das nicht kann
+
 `display_file` liefert **keine Bytes**. Es antwortet nur mit `{"path": ...,
 "exists": true}` und überlässt die Anzeige dem Aufrufer; Open WebUI schickt
 daraufhin ein `terminal:display_file`-Ereignis mit dem Pfad an die Oberfläche,
@@ -352,6 +384,9 @@ beendet den Prozess mit einer Zeile, die die Variable nennt.
 | `OTPROXY_READY_TIMEOUT` | `90` | Wartezeit auf `/health` des Containers. |
 | `OTPROXY_SCOPE_BY_CONTEXT` | `true` | `X-Terminal-Context-Id` (z. B. pro Chat) ergibt eine eigene Sandbox. |
 | `OTPROXY_POLICIES` | `{}` | JSON mit benannten Profilen, erreichbar über `/p/<id>/…`. |
+| `OTPROXY_PUBLIC_URL` | — | Adresse, unter der der Browser des Nutzers den Proxy erreicht. Gesetzt = `share_file` existiert. |
+| `OTPROXY_DOWNLOAD_TTL` | `600` | Gültigkeit einer ausgegebenen Datei-URL in Sekunden. |
+| `OTPROXY_DOWNLOAD_SECRET` | aus dem API-Key | Signaturgeheimnis für die URLs. |
 | `OTPROXY_MAX_BODY` | `1g` | Größte erlaubte Anfrage (Uploads). |
 | `OTPROXY_REQUEST_TIMEOUT` | `300` | Obergrenze für eine weitergeleitete Anfrage. |
 | `OTPROXY_VERIFY_ISOLATION` | `true` | Selbsttest von innen beim ersten Container. |
@@ -589,5 +624,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 262 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 281 Prüfungen,
 alle grün.

@@ -254,10 +254,13 @@ async def test_websocket(h: Harness) -> None:
                 await asyncio.sleep(0.6)
                 check("an open socket keeps the sandbox alive without any traffic",
                       sandbox[0].idle_seconds < 5, f"idle {sandbox[0].idle_seconds:.0f}s")
-                stale = sandbox[0].last_used
+        # Read it twice after the socket is gone: comparing against a value taken
+        # before the close would race with the last heartbeat.
         await asyncio.sleep(0.5)
         if sandbox:
-            check("and stops counting once it closes", sandbox[0].last_used == stale)
+            settled = sandbox[0].last_used
+            await asyncio.sleep(0.5)
+            check("and stops counting once it closes", sandbox[0].last_used == settled)
     finally:
         app_module.WS_KEEPALIVE_SECONDS = previous
 
@@ -269,6 +272,66 @@ async def test_websocket(h: Harness) -> None:
             check("a socket without a user id is refused", exc.code == 4003, f"code {exc.code}")
         else:
             check("a socket without a user id is refused", False, "socket stayed open")
+
+
+async def test_sharing() -> None:
+    print("\nhanding a file to the user")
+    async with Harness() as plain:
+        response = await plain.client.get("/share?path=/home/user/x.docx", headers=plain.auth("u1"))
+        check("sharing is off until a public URL is set", response.status_code == 404)
+        check("the 404 names the setting", "OTPROXY_PUBLIC_URL" in response.text)
+        schema = (await plain.client.get("/openapi.json")).json()
+        check("and the tool is not advertised", "/share" not in schema.get("paths", {}))
+
+    async with Harness(OTPROXY_PUBLIC_URL="http://proxy.invalid:8800", OTPROXY_DOWNLOAD_TTL="300") as h:
+        schema = (await h.client.get("/openapi.json")).json()
+        check("the tool is advertised to the model",
+              schema.get("paths", {}).get("/share", {}).get("get", {}).get("operationId") == "share_file")
+        check("the sandbox's own tools are still there", "/execute" in schema.get("paths", {}))
+
+        response = await h.client.get("/share?path=/home/user/Testdokument.docx", headers=h.auth("u1"))
+        check("a link is handed out", response.status_code == 200, response.text[:200])
+        payload = response.json()
+        check("with markdown to paste into the answer",
+              payload["markdown"] == f"[Testdokument.docx]({payload['url']})", payload["markdown"])
+        check("and a lifetime", payload["expires_in_seconds"] == 300)
+        check("the link points at the configured address", payload["url"].startswith("http://proxy.invalid:8800/d/"))
+
+        token = payload["url"].rsplit("/", 1)[-1]
+        response = await h.client.get(f"/d/{token}")
+        check("the browser gets the file without a key", response.status_code == 200)
+        check("with the bytes from the sandbox", response.content == b"PK\x03\x04-fake-docx-bytes")
+        check("as a download, under its own name",
+              'attachment; filename="Testdokument.docx"' in response.headers.get("content-disposition", ""))
+        check("and not sniffable", response.headers.get("x-content-type-options") == "nosniff")
+
+        response = await h.client.get(f"/d/{token[:-2]}xy")
+        check("a tampered link is refused", response.status_code == 403)
+        response = await h.client.get("/d/nonsense")
+        check("so is nonsense", response.status_code == 403)
+
+        response = await h.client.get("/share?path=/home/user/missing.docx", headers=h.auth("u1"))
+        check("a file that is not there is a 404", response.status_code == 404)
+
+        image = await h.client.get("/share?path=/home/user/chart.png", headers=h.auth("u1"))
+        check("an image comes back as an inline image", image.json()["markdown"].startswith("!["))
+
+        # An expired link, and one whose workspace is gone.
+        import time as _time
+
+        from otproxy import share as share_module
+
+        stale = share_module.mint(
+            h.settings.download_secret,
+            share_module.Grant(key="whatever", path="/home/user/x", expires=int(_time.time()) - 1),
+        )
+        response = await h.client.get(f"/d/{stale}")
+        check("an expired link is refused", response.status_code == 403 and "expired" in response.text)
+
+        mine = [item for item in h.backend.created if item.scope and item.scope.user_id == "u1"][0]
+        await h.manager.release(mine.key)
+        response = await h.client.get(f"/d/{token}")
+        check("once the workspace is gone the link says so", response.status_code == 410, response.text[:120])
 
 
 async def test_capacity() -> None:
@@ -477,6 +540,7 @@ async def main() -> int:
         await test_websocket(h)
         await test_admin(h)
     await test_body_limit()
+    await test_sharing()
     await test_capacity()
     await test_reaper()
     await test_isolation_selfcheck()

@@ -18,14 +18,17 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import time
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import FastAPI, Request, WebSocket
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 
-from . import config, ids, log
+from . import config, ids, log, share
 from .ids import InvalidIdentity, Scope
 from .manager import CapacityError, SandboxManager
 from .proxy import HttpForwarder, WebSocketForwarder
@@ -229,12 +232,115 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
 
     @app.get("/openapi.json")
     async def openapi_schema() -> Response:
-        """The sandbox image's own schema: this is how Open WebUI learns the tools."""
-        return await cached("/openapi.json")
+        """The sandbox image's own schema, plus the tools the proxy itself adds.
+
+        Open WebUI builds its tool definitions from this, so share_file has to
+        appear here or the model never learns it exists.
+        """
+        answer = await cached("/openapi.json")
+        if not settings.sharing_enabled or answer.status_code != 200:
+            return answer
+        try:
+            schema = json.loads(bytes(answer.body))
+        except ValueError:
+            return answer
+        path, definition = share.schema_fragment(max(1, int(settings.download_ttl // 60)))
+        schema.setdefault("paths", {})[path] = definition
+        return JSONResponse(schema)
 
     @app.get("/api/config")
     async def api_config() -> Response:
         return await cached("/api/config")
+
+    @app.get("/share")
+    async def share_file(request: Request, path: str = "") -> Response:
+        """Give the caller a link their user can open.  See otproxy/share.py."""
+        if not settings.sharing_enabled:
+            return JSONResponse(
+                {"detail": "file sharing is not configured; set OTPROXY_PUBLIC_URL"}, status_code=404
+            )
+        if not authorised(request):
+            return unauthorised()
+        if not path:
+            return JSONResponse({"detail": "path is required"}, status_code=422)
+        sandbox, failure = await sandbox_for(request, "")
+        if failure is not None:
+            return failure
+        assert sandbox is not None
+
+        # The sandbox resolves the path itself, so a relative one works and what
+        # comes back is the path the file really has.
+        probe_url = f"{sandbox.base_url}/files/display?path={quote(path, safe='')}"
+        answer: Dict[str, Any] = {}
+        try:
+            upstream = await state["http"].fetch(probe_url, sandbox.api_key)
+            try:
+                payload = await upstream.aread()
+                if upstream.status_code == 200:
+                    answer = json.loads(payload)
+            finally:
+                await upstream.aclose()
+        except (ValueError, OSError) as exc:
+            logger.warning("could not resolve %s in %s: %s", path, sandbox.key, exc)
+        except Exception as exc:  # noqa: BLE001 -- httpx raises several shapes
+            logger.warning("could not resolve %s in %s: %s", path, sandbox.key, exc)
+        if not answer.get("exists"):
+            return JSONResponse({"detail": f"no such file: {path}"}, status_code=404)
+
+        grant = share.Grant(
+            key=sandbox.key,
+            path=str(answer.get("path") or path),
+            expires=int(time.time() + settings.download_ttl),
+        )
+        token = share.mint(settings.download_secret, grant)
+        url = share.link(settings.public_url, token)
+        logger.info("handed out a link to %s for %s", grant.name, sandbox.key)
+        return JSONResponse(
+            {
+                "url": url,
+                "markdown": share.markdown_for(grant.name, url),
+                "name": grant.name,
+                "expires_in_seconds": int(settings.download_ttl),
+            }
+        )
+
+    @app.get("/d/{token}")
+    async def download(token: str) -> Response:
+        """Serve one file from one sandbox to a browser, on a signed link."""
+        if not settings.sharing_enabled:
+            return PlainTextResponse("file sharing is not configured", status_code=404)
+        try:
+            grant = share.verify(settings.download_secret, token)
+        except share.BadToken as exc:
+            return PlainTextResponse(str(exc), status_code=403)
+        sandbox = mgr().lookup(grant.key)
+        if sandbox is None:
+            return PlainTextResponse(
+                "this workspace is no longer running, so the file is gone", status_code=410
+            )
+        url = f"{sandbox.base_url}/files/view?path={quote(grant.path, safe='')}"
+        try:
+            upstream = await state["http"].fetch(url, sandbox.api_key)
+        except Exception as exc:  # noqa: BLE001 -- any failure is the same to the browser
+            logger.warning("could not read %s for a link: %s", grant.path, exc)
+            return PlainTextResponse("the file could not be read", status_code=502)
+        if upstream.status_code != 200:
+            await upstream.aclose()
+            return PlainTextResponse("the file is gone", status_code=404)
+        sandbox.touch()
+        media_type = upstream.headers.get("content-type", "application/octet-stream")
+        inline = media_type.startswith("image/") or media_type == "application/pdf"
+        return StreamingResponse(
+            upstream.aiter_raw(),
+            status_code=200,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{grant.name}"',
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+            background=BackgroundTask(upstream.aclose),
+        )
 
     # ------------------------------------------------------------------
     # administration
