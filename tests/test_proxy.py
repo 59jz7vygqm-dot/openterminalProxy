@@ -115,6 +115,7 @@ async def test_authentication(h: Harness) -> None:
     response = await h.client.post("/execute", json={"command": "id"}, headers={"Authorization": f"Bearer {KEY}"})
     check("a missing X-User-Id is a 400, not a shared sandbox", response.status_code == 400)
     check("the message names the header", "X-User-Id" in response.text)
+    check("and tells whoever reads it how to fix it", "{{USER_ID}}" in response.text)
 
     response = await h.client.post(
         "/execute", json={"command": "id"},

@@ -164,9 +164,20 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         try:
             scope = scope_of(request.headers, request.query_params, policy_id)
         except InvalidIdentity as exc:
-            # Open WebUI always sends X-User-Id.  Anything else is either a
-            # misconfiguration or somebody poking at the port.
-            return None, JSONResponse({"detail": str(exc)}, status_code=400)
+            # An Open Terminal connection always sends X-User-Id; a generic
+            # tool-server or MCP connection never does.  Whoever reads this is
+            # usually the person who can fix it -- in a chat, through the
+            # model -- so the answer goes with it.
+            return None, JSONResponse(
+                {
+                    "detail": (
+                        f"{exc}. This proxy gives every user their own sandbox and will not share one. "
+                        "Either register it under Admin > Integrations > Open Terminal, or add a custom "
+                        "header to the connection: X-User-Id = {{USER_ID}}"
+                    )
+                },
+                status_code=400,
+            )
         try:
             return await mgr().acquire(scope, policy), None
         except CapacityError as exc:

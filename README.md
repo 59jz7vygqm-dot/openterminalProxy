@@ -198,7 +198,27 @@ funktioniert damit — aber nur mit eingeschalteter Weiterleitung der
 Nutzerinformationen, und ohne sie bekommt **jeder Aufruf eine 400** statt einer
 geteilten Sandbox. Das ist Absicht: ohne Identität keine Zuordnung.
 
-Richtig eingetragen gehört er unter **Admin → Integrationen → Open Terminal**.
+**Der Weg, der auf jedem Pfad funktioniert:** Open WebUI erlaubt eigene
+Header pro Verbindung, mit Platzhaltern, und wendet sie sowohl auf MCP- als
+auch auf OpenAPI-Verbindungen an. Trag in der Verbindung ein:
+
+| Header | Wert |
+|---|---|
+| `X-User-Id` | `{{USER_ID}}` |
+| `X-Session-Id` | `{{CHAT_ID}}` (optional, für das Arbeitsverzeichnis pro Chat) |
+
+Damit braucht es weder `ENABLE_FORWARD_USER_INFO_HEADERS` noch einen
+bestimmten Verbindungstyp.
+
+Richtig eingetragen gehört er trotzdem unter **Admin → Integrationen → Open
+Terminal**: nur dort gibt es das Terminal-Fenster (WebSocket), den
+Dateibrowser, den System-Prompt aus dem Image und den
+Arbeitsverzeichnis-Kontext. Eine Tool-Server-Verbindung bekommt nur die
+Funktionen aus `/openapi.json`.
+
+Fehlt die Identität, antwortet der Proxy mit 400 und schreibt beide Auswege in
+die Fehlermeldung — die landet im Chat, wo der Mensch sitzt, der es ändern
+kann.
 
 **Cookies aus: ja.** „Forward cookies" ist in Open WebUI standardmäßig aus und
 gehört auch aus: der Proxy authentisiert mit dem Bearer-Key und braucht keine.
@@ -505,5 +525,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 261 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 262 Prüfungen,
 alle grün.
