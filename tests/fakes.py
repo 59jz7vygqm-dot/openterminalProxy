@@ -38,6 +38,7 @@ class FakeTerminal:
     def __init__(self) -> None:
         self.requests: List[Dict[str, Any]] = []
         self.ws_auth_tokens: List[str] = []
+        self.created_dirs: List[str] = []
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "websocket":
@@ -97,6 +98,9 @@ class FakeTerminal:
                         "headers": [(b"content-type", b"application/vnd.openxmlformats-officedocument"
                                                       b".wordprocessingml.document")]})
             return await send({"type": "http.response.body", "body": b"PK\x03\x04-fake-docx-bytes"})
+        if path == "/files/mkdir":
+            self.created_dirs.append(json.loads(body or b"{}").get("path", ""))
+            return await _json(send, 200, {"path": json.loads(body or b"{}").get("path", "")})
         if path == "/files/upload":
             return await _json(send, 200, {"received": len(body)})
         if path == "/big":

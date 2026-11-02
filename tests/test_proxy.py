@@ -334,6 +334,25 @@ async def test_sharing() -> None:
         check("once the workspace is gone the link says so", response.status_code == 410, response.text[:120])
 
 
+async def test_sandbox_mkdir() -> None:
+    print("\npreparing a fresh sandbox")
+    async with Harness(OTPROXY_SANDBOX_ENV='{"OPEN_TERMINAL_FILE_BROWSER_ROOT":"/home/user/public"}') as h:
+        check("the folder is derived from the file browser root",
+              h.settings.sandbox_mkdir == ["/home/user/public"])
+        await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        check("and created in the sandbox before the first request returns",
+              "/home/user/public" in h.terminal.created_dirs, str(h.terminal.created_dirs))
+
+    async with Harness(OTPROXY_SANDBOX_MKDIR="/home/user/in,/home/user/out") as h:
+        await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        check("an explicit list is created in order",
+              h.terminal.created_dirs == ["/home/user/in", "/home/user/out"], str(h.terminal.created_dirs))
+
+    async with Harness() as h:
+        await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        check("nothing is created when nothing is configured", not h.terminal.created_dirs)
+
+
 async def test_ui_features() -> None:
     print("\ntaking parts of the side pane away")
     async with Harness() as h:
@@ -571,6 +590,7 @@ async def main() -> int:
         await test_websocket(h)
         await test_admin(h)
     await test_body_limit()
+    await test_sandbox_mkdir()
     await test_ui_features()
     await test_hide_ports()
     await test_sharing()

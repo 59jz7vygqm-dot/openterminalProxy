@@ -286,6 +286,12 @@ Nutzer mit: Dateien, Ports, Terminal. Die drei lassen sich einzeln entschärfen:
 | Ports-Liste | `OTPROXY_HIDE_PORTS=true` | der Proxy beantwortet `/ports` selbst mit einer leeren Liste |
 | Dateibrowser | `OPEN_TERMINAL_FILE_BROWSER_ROOT=/home/user/public` in `OTPROXY_SANDBOX_ENV` | zeigt nur den Ordner, in den der Agent Ergebnisse legt |
 
+Den Ordner legt der Proxy in jeder neuen Sandbox selbst an — zeigt der
+Dateibrowser auf ein Verzeichnis, das es nicht gibt, meldet Open WebUI
+„Failed to load directory. Check your Terminal connection" und verdächtigt die
+Verbindung. Abgeleitet wird er aus `OPEN_TERMINAL_FILE_BROWSER_ROOT`; mehrere
+oder andere Verzeichnisse über `OTPROXY_SANDBOX_MKDIR=/home/user/in,/home/user/out`.
+
 Also zusammen:
 
 ```bash
@@ -426,6 +432,7 @@ beendet den Prozess mit einer Zeile, die die Variable nennt.
 | `OTPROXY_APPARMOR_PROFILE` | — | Name eines AppArmor-Profils. |
 | `OTPROXY_RUNTIME` | — | Alternative Runtime, z. B. `runsc` (gVisor). Deutlich stärkere Trennung als ein normaler Container. |
 | `OTPROXY_SANDBOX_ENV` | `{}` | JSON mit zusätzlichen Variablen für den Container. |
+| `OTPROXY_SANDBOX_MKDIR` | aus dem Browser-Root | Verzeichnisse, die in jeder neuen Sandbox angelegt werden. |
 | `OTPROXY_PERSIST_HOME` | `false` | `true` = `/home/user` liegt in einem Volume pro Nutzer und überlebt. |
 | `OTPROXY_NETWORK_MODE` | `per-user` | `per-user` oder `shared` (schwächer, siehe oben). |
 | `OTPROXY_NET_SUPERNET` | `10.88.0.0/16` | Bereich, aus dem die Sandbox-Netze kommen. |
@@ -680,5 +687,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 289 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 293 Prüfungen,
 alle grün.

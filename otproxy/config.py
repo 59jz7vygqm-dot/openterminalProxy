@@ -178,6 +178,7 @@ class Settings:
     apparmor_profile: str
     runtime: str
     sandbox_env: Dict[str, str]
+    sandbox_mkdir: List[str]
     persist_home: bool
 
     # --- networking ------------------------------------------------------
@@ -314,6 +315,17 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
     policies = {name: Policy.parse(name, value) for name, value in policies_raw.items()}
 
     sandbox_env = {str(k): str(v) for k, v in _json_dict("SANDBOX_ENV").items()}
+    # Directories to create in a fresh sandbox.  The default exists because
+    # pointing Open Terminal's file browser at a folder that is not there makes
+    # its UI say "Failed to load directory" and blame the connection.
+    mkdir = _list("SANDBOX_MKDIR")
+    if not mkdir:
+        browser_root = sandbox_env.get("OPEN_TERMINAL_FILE_BROWSER_ROOT", "").strip()
+        if browser_root.startswith("/"):
+            mkdir = [browser_root]
+    for directory in mkdir:
+        if not directory.startswith("/") or ".." in directory.split("/"):
+            raise ConfigError(f"OTPROXY_SANDBOX_MKDIR: {directory!r} is not an absolute path")
     for name in sandbox_env:
         if name in ("OPEN_TERMINAL_API_KEY", "OPEN_TERMINAL_API_KEY_FILE"):
             raise ConfigError(
@@ -354,6 +366,7 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
         apparmor_profile=_str("APPARMOR_PROFILE"),
         runtime=_str("RUNTIME"),
         sandbox_env=sandbox_env,
+        sandbox_mkdir=mkdir,
         persist_home=_bool("PERSIST_HOME", False),
         network_mode=network_mode,
         supernet=supernet,

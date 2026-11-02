@@ -211,10 +211,33 @@ class SandboxManager:
                 await self._forget(sandbox, destroy=True)
                 self._stats["failed"] += 1
                 raise
+            await self._prepare(sandbox)
             sandbox.touch()
             if self.settings.verify_isolation and self._isolation is None:
                 await self._verify_isolation(sandbox)
             return sandbox
+
+    async def _prepare(self, sandbox: Sandbox) -> None:
+        """Create the directories a fresh sandbox is expected to have.
+
+        Open Terminal's file browser reports "Failed to load directory" when its
+        root does not exist, and blames the connection for it -- so the folder an
+        operator points it at is created here, through the container's own API.
+        """
+        for directory in self.settings.sandbox_mkdir:
+            try:
+                response = await self._probe.post(
+                    f"{sandbox.base_url}/files/mkdir",
+                    headers={"Authorization": f"Bearer {sandbox.api_key}"},
+                    json={"path": directory},
+                    timeout=httpx.Timeout(10.0, connect=2.0),
+                )
+                if response.status_code >= 400:
+                    logger.warning(
+                        "could not create %s in %s: %s", directory, sandbox.name, response.text[:200]
+                    )
+            except httpx.HTTPError as exc:
+                logger.warning("could not create %s in %s: %s", directory, sandbox.name, exc)
 
     async def _provision(self, scope: Scope, policy: Optional[Policy]) -> Sandbox:
         """Claim a warm container if one fits, otherwise create a fresh one."""
