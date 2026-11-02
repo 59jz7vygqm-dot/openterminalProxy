@@ -283,6 +283,53 @@ async def main() -> int:
             os.environ.pop("OTPROXY_SELF_CONTAINER", None)
             await client.remove_container(stand_in_id)
 
+        # --- a persistent home really persists -----------------------------
+        keeping = settings_for(OTPROXY_PERSIST_HOME="true")
+        keeper = SandboxManager(keeping, DockerSandboxBackend(keeping, client))
+        await keeper.start()
+        try:
+            jack = await keeper.acquire(Scope("jack"))
+            volume = f"{PREFIX}-v-{jack.key}"
+            info = await client.inspect_container(jack.container_id)
+            mounts = {mount.get("Name"): mount.get("Destination") for mount in (info.get("Mounts") or [])}
+            check("a persistent home is mounted from a named volume",
+                  mounts.get(volume) == "/home/user", str(mounts))
+            written = await keeper.backend.docker.exec_run(
+                jack.container_id, ["/bin/fakeot", "--write", "/home/user/keep.txt", "survived"]
+            )
+            check("the sandbox can write to it", written.exit_code == 0, written.output.strip())
+
+            await keeper.release(jack.key)
+            check("the container is gone", await client.inspect_container(jack.container_id) is None)
+            check("but the volume is not",
+                  any(item.get("Name") == volume for item in await client.list_volumes()))
+
+            again = await keeper.acquire(Scope("jack"))
+            check("the same user gets a new container", again.container_id != jack.container_id)
+            read = await keeper.backend.docker.exec_run(
+                again.container_id, ["/bin/fakeot", "--read", "/home/user/keep.txt"]
+            )
+            check("with the files from the last one still there",
+                  "survived" in read.output, read.output.strip())
+            await keeper.release(again.key)
+            await client.remove_volume(volume)
+        finally:
+            for task in keeper._tasks:
+                task.cancel()
+
+        # And the default, where nothing is meant to survive.
+        gone = SandboxManager(settings, DockerSandboxBackend(settings, client))
+        await gone.start()
+        try:
+            kim = await gone.acquire(Scope("kim"))
+            ephemeral_volume = f"{PREFIX}-v-{kim.key}"
+            await gone.release(kim.key)
+            check("without PERSIST_HOME no volume is left behind",
+                  not any(item.get("Name") == ephemeral_volume for item in await client.list_volumes()))
+        finally:
+            for task in gone._tasks:
+                task.cancel()
+
         # --- capacity ----------------------------------------------------
         full = settings_for(OTPROXY_MAX_SANDBOXES="2", OTPROXY_EVICT_MIN_IDLE="3600")
         crowded = SandboxManager(full, DockerSandboxBackend(full, client))

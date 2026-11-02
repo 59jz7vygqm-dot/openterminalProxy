@@ -157,6 +157,25 @@ static int serve(void) {
 }
 
 int main(int argc, char **argv) {
+    /* Used by the persistence test: write a file, then read it back out of a
+     * container that was created later from the same volume. */
+    if (argc == 4 && strcmp(argv[1], "--write") == 0) {
+        FILE *handle = fopen(argv[2], "w");
+        if (!handle) { perror("open"); return 1; }
+        fputs(argv[3], handle);
+        fclose(handle);
+        printf("wrote %s\n", argv[2]);
+        return 0;
+    }
+    if (argc == 3 && strcmp(argv[1], "--read") == 0) {
+        FILE *handle = fopen(argv[2], "r");
+        if (!handle) { printf("MISSING\n"); return 1; }
+        char line[4096];
+        while (fgets(line, sizeof line, handle)) fputs(line, stdout);
+        fclose(handle);
+        printf("\n");
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--mountinfo") == 0) {
         /* Used once, to confirm that a container can find its own id this way. */
         FILE *handle = fopen("/proc/self/mountinfo", "r");

@@ -321,6 +321,44 @@ liegt (`OTPROXY_PERSIST_HOME`). Der nächste Aufruf bekommt eine neue, leere;
 bei gemessenen 1–2 s Kaltstart merkt der Nutzer davon nichts außer den
 verlorenen Dateien.
 
+### Dateien behalten
+
+`OTPROXY_PERSIST_HOME=true` hängt `/home/user` in ein Docker-Volume pro
+Nutzer, `<prefix>-v-<digest>`. Das überlebt Leerlauf-Räumung, Verdrängung bei
+Platzmangel, Proxy-Neustart und Update — der Container wird gelöscht, das
+Volume bleibt liegen und wird dem nächsten Container desselben Nutzers wieder
+untergeschoben. Im Test nachgewiesen: Datei schreiben, Container löschen,
+neuen anfordern, Datei ist da.
+
+Drei Dinge dazu, die weh tun, wenn man sie nicht weiß:
+
+* **Der `digest` ist der Schlüssel aus Nutzer-ID, Terminal-Kontext und
+  Policy.** Ändert sich einer davon, ist es ein anderes Zuhause. Wer eine
+  Policy wechselt oder pro Chat getrennt wird, findet seine Dateien nicht mehr
+  — sie sind nicht weg, sie liegen in einem anderen Volume.
+* **Es gibt keine Quota.** `OTPROXY_STORAGE_SIZE` deckelt die Schreibschicht
+  des Containers, nicht das Volume. Ein Nutzer kann die Platte des Hosts
+  füllen. Gegenmittel: eigenes Dateisystem für `/var/lib/docker/volumes`, oder
+  XFS mit Projekt-Quotas, oder Kubernetes mit PVCs. Beobachten mit
+  `docker system df -v`.
+* **Niemand räumt es auf.** Mit `PERSIST_HOME=true` löscht der Proxy kein
+  Volume, auch nicht von einem Nutzer, den es in Open WebUI nicht mehr gibt.
+  Das ist Absicht — Daten wegwerfen ist nichts, was ein Reaper nebenbei tun
+  sollte —, heißt aber: `docker volume rm` bleibt deine Aufgabe.
+
+Mit der Voreinstellung `false` gibt es gar kein Volume: alles liegt in der
+Schreibschicht des Containers und geht mit ihm.
+
+### Was mit einem Container passiert, wenn er geht
+
+Er wird **gelöscht**, nicht gestoppt — samt seinem Netz und, bei
+`PERSIST_HOME=false`, seinem Volume. Ein gestoppter Container würde seinen
+Namen, seine Schreibschicht und seinen Netzanschluss weiter belegen, und bei
+1–2 s Kaltstart ist Wiederbeleben kein Gewinn. Die einzige Ausnahme: ein
+Container, der von selbst abstürzt, bleibt bis zum nächsten Reaper-Durchgang
+liegen, damit sein Log noch lesbar ist (`AutoRemove` ist aus Absicht nicht
+gesetzt).
+
 Ein Neustart des Proxys (`docker compose up -d` nach jeder Änderung) nimmt
 laufende Sandboxes mit: der neue Prozess adoptiert sie und hängt sich wieder in
 deren Netze, weil der ersetzte Container seinen Anschluss daran verloren hat —
@@ -443,5 +481,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 249 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 256 Prüfungen,
 alle grün.
