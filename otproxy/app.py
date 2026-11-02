@@ -31,7 +31,7 @@ from starlette.background import BackgroundTask
 from . import config, ids, log, share
 from .ids import InvalidIdentity, Scope
 from .manager import CapacityError, SandboxManager
-from .proxy import HttpForwarder, WebSocketForwarder
+from .proxy import HttpForwarder, UpstreamUnreachable, WebSocketForwarder
 from .sandbox import Sandbox, SandboxError
 
 logger = log.get("app")
@@ -59,6 +59,8 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         )
         state["ws"] = WebSocketForwarder(open_timeout=max(10.0, settings.connect_timeout * 2))
         state["started"] = time.time()
+        for note in settings.notes:
+            logger.warning("%s", note)
         await state["manager"].start()
         logger.info(
             "listening on %s:%d -- image=%s limit=%d idle=%.0fs network=%s",
@@ -532,9 +534,31 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         # it is translated rather than lost.
         if not request.headers.get("x-session-id") and request.headers.get("x-openwebui-chat-id"):
             extra["X-Session-Id"] = request.headers["x-openwebui-chat-id"]
-        return await state["http"].forward(
-            request, sandbox.base_url, sandbox.api_key, path, extra_headers=extra or None
-        )
+        try:
+            return await state["http"].forward(
+                request, sandbox.base_url, sandbox.api_key, path, extra_headers=extra or None
+            )
+        except UpstreamUnreachable:
+            # The sandbox died since we last spoke to it.  Replace it and try
+            # once -- a body already streamed upstream cannot be sent again, so
+            # only requests without one are retried.
+            await mgr().invalidate(sandbox)
+            if request.method.upper() not in ("GET", "HEAD", "OPTIONS"):
+                return JSONResponse(
+                    {"detail": "the sandbox had to be restarted, please send that again"},
+                    status_code=503,
+                    headers={"Retry-After": "1"},
+                )
+            replacement, failure = await sandbox_for(request, policy_id)
+            if failure is not None:
+                return failure
+            assert replacement is not None
+            try:
+                return await state["http"].forward(
+                    request, replacement.base_url, replacement.api_key, path, extra_headers=extra or None
+                )
+            except UpstreamUnreachable:
+                return JSONResponse({"detail": "the sandbox is not reachable"}, status_code=502)
 
     @app.api_route("/p/{policy_id}/{path:path}", methods=ALL_METHODS)
     async def forward_with_policy(policy_id: str, path: str, request: Request) -> Response:

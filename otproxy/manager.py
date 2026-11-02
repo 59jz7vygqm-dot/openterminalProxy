@@ -242,7 +242,11 @@ class SandboxManager:
     async def _provision(self, scope: Scope, policy: Optional[Policy]) -> Sandbox:
         """Claim a warm container if one fits, otherwise create a fresh one."""
         wanted_image = self.settings.image_for(policy)
-        for index, warm in enumerate(self._warm):
+        # A warm container has no per-user volume and cannot be given one, so
+        # with a persistent home it must not be handed out.  The configuration
+        # refuses that combination; this is the second line of defence.
+        warm_usable = not self.settings.persist_home
+        for index, warm in enumerate(self._warm if warm_usable else []):
             if warm.policy_id == (policy.id if policy else "") and await self._still_running(warm):
                 if (await self._image_of(warm)) != wanted_image:
                     continue
@@ -368,6 +372,20 @@ class SandboxManager:
             await self.backend.destroy(sandbox)
         except Exception as exc:  # noqa: BLE001
             logger.warning("could not remove %s: %s", sandbox.name, exc)
+
+    async def invalidate(self, sandbox: Sandbox) -> None:
+        """Forget a sandbox that stopped answering, and clean up after it.
+
+        The hot path returns a cached, ready sandbox without asking Docker
+        whether it is still alive -- that check would cost a round trip on
+        every request.  The price is that a container which died in between
+        (an OOM kill, a hand-made `docker rm`) is noticed here instead.
+        """
+        async with self._lock(sandbox.key):
+            current = self._sandboxes.get(sandbox.key)
+            if current is not None and current.container_id == sandbox.container_id:
+                logger.warning("sandbox %s stopped answering, replacing it", sandbox.name)
+                await self._forget(current, destroy=True)
 
     def lookup(self, key: str) -> Optional[Sandbox]:
         """The sandbox for *key* if one is running.  Never starts one."""

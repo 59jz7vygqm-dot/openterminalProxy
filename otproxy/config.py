@@ -223,6 +223,8 @@ class Settings:
     reject_sandbox_clients: bool
 
     # --- housekeeping ----------------------------------------------------
+    #: Decisions the configuration made for the operator, logged at startup.
+    notes: List[str]
     label_namespace: str
     name_prefix: str
     log_level: str
@@ -292,6 +294,18 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
 
     max_sandboxes = _int("MAX_SANDBOXES", 50, minimum=1)
     pool_size = _int("POOL_SIZE", 1, minimum=0)
+    notes: List[str] = []
+    if _bool("PERSIST_HOME", False) and pool_size:
+        # A container's mounts are fixed when it is created, so one started
+        # before anybody claimed it cannot be given that user's home volume
+        # afterwards -- it would hand out a sandbox whose files do not survive.
+        # Persistence is the stronger promise, so the pool gives way, loudly.
+        notes.append(
+            f"OTPROXY_POOL_SIZE={pool_size} ignored because OTPROXY_PERSIST_HOME is set: a container "
+            "started before a user claimed it cannot be given that user's home volume, so every sandbox "
+            "is created on demand. The first request of a session pays the cold start."
+        )
+        pool_size = 0
     if pool_size >= max_sandboxes:
         raise ConfigError(
             f"OTPROXY_POOL_SIZE ({pool_size}) must be smaller than OTPROXY_MAX_SANDBOXES ({max_sandboxes}): "
@@ -408,6 +422,7 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
         # own port.  It has no key to use it with, but there is no reason to
         # answer it at all: requests from the sandbox range are refused.
         reject_sandbox_clients=_bool("REJECT_SANDBOX_CLIENTS", True),
+        notes=notes,
         label_namespace=_str("LABEL_NAMESPACE", "sh.openterminal.proxy"),
         name_prefix=_str("NAME_PREFIX", "otsbx"),
         log_level=_str("LOG_LEVEL", "INFO").upper(),

@@ -572,6 +572,26 @@ Drei Dinge dazu, die weh tun, wenn man sie nicht weiß:
 Mit der Voreinstellung `false` gibt es gar kein Volume: alles liegt in der
 Schreibschicht des Containers und geht mit ihm.
 
+**`PERSIST_HOME` schaltet den Warm-Pool ab.** Die Mounts eines Containers
+stehen fest, sobald er erzeugt ist — ein vorgewärmter Container, den noch
+niemand hatte, kann das Volume eines Nutzers nicht nachträglich bekommen. Also
+entsteht jede Sandbox bei Bedarf, und der erste Aufruf einer Sitzung zahlt den
+Kaltstart (bei dem gemessenen Wert 1–2 s). Der Proxy setzt `POOL_SIZE` dafür
+selbst auf 0 und schreibt eine Zeile ins Log, statt still ein Zuhause
+auszuliefern, das nicht überlebt.
+
+### Wenn eine Sandbox hinter dem Rücken des Proxys stirbt
+
+Der schnelle Pfad gibt eine bekannte, bereite Sandbox heraus, ohne Docker zu
+fragen, ob sie noch lebt — diese Prüfung wäre ein Rundgang pro Anfrage. Stirbt
+der Container zwischendurch (OOM-Kill, ein `docker rm` von Hand), merkt der
+Proxy es an der ersten Anfrage, die nicht mehr durchkommt: er wirft die
+Sandbox weg, legt eine neue an und beantwortet lesende Anfragen direkt aus der
+neuen. Anfragen mit Inhalt (ein `POST /execute`) bekommen eine `503` mit
+`Retry-After: 1` und der Bitte, es noch einmal zu senden — der Körper ist zu
+diesem Zeitpunkt schon stromabwärts gegangen und lässt sich nicht
+wiederholen.
+
 ### Was mit einem Container passiert, wenn er geht
 
 Er wird **gelöscht**, nicht gestoppt — samt seinem Netz und, bei
@@ -704,5 +724,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 293 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 301 Prüfungen,
 alle grün.

@@ -68,6 +68,10 @@ class BodyTooLarge(Exception):
     """The request body went past OTPROXY_MAX_BODY."""
 
 
+class UpstreamUnreachable(Exception):
+    """Nothing answered at the sandbox's address.  The caller may retry."""
+
+
 def request_headers(
     incoming: Iterable[Tuple[str, str]], api_key: str, extra: Optional[Dict[str, str]] = None
 ) -> List[Tuple[bytes, bytes]]:
@@ -137,8 +141,10 @@ class HttpForwarder:
                 status_code=413,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
-            logger.warning("sandbox at %s refused the connection: %s", base_url, exc)
-            return JSONResponse({"detail": "the sandbox is not reachable"}, status_code=502)
+            # Raised, not answered: the container may be gone, and the caller
+            # can replace it and try once more.
+            logger.info("nothing answered at %s: %s", base_url, exc)
+            raise UpstreamUnreachable(str(exc)) from None
         except httpx.ReadTimeout:
             return JSONResponse({"detail": "the sandbox did not answer in time"}, status_code=504)
         except httpx.HTTPError as exc:

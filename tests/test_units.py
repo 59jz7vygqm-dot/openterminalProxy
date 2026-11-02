@@ -64,6 +64,12 @@ def test_config() -> None:
            {**BASE, "OTPROXY_PERSIST_HOME": "maybe"}, contains="OTPROXY_PERSIST_HOME")
     raises("bad size names the variable", config.ConfigError, config.load,
            {**BASE, "OTPROXY_MEMORY": "2 gigs"}, contains="OTPROXY_MEMORY")
+    persistent = config.load({**BASE, "OTPROXY_PERSIST_HOME": "true", "OTPROXY_POOL_SIZE": "1"})
+    check("a persistent home turns the warm pool off", persistent.pool_size == 0,
+          "a pre-started container cannot be given that user's volume afterwards")
+    check("and says so instead of doing it quietly",
+          any("POOL_SIZE" in note and "PERSIST_HOME" in note for note in persistent.notes),
+          str(persistent.notes))
     raises("pool cannot fill the ceiling", config.ConfigError, config.load,
            {**BASE, "OTPROXY_POOL_SIZE": "4", "OTPROXY_MAX_SANDBOXES": "4"}, contains="POOL_SIZE")
     raises("lifetime must exceed idle timeout", config.ConfigError, config.load,

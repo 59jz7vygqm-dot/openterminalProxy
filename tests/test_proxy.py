@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import httpx
 import websockets
 
-from fakes import UPSTREAM_KEY, FakeBackend, FakeTerminal, Server
+from fakes import UPSTREAM_KEY, FakeBackend, FakeTerminal, Server, free_port
 from otproxy import config
 from otproxy.app import create_app
 from otproxy.manager import SandboxManager
@@ -565,6 +565,32 @@ async def test_isolation_selfcheck() -> None:
         check("and keeps refusing, rather than only the first one", response.status_code == 502)
 
 
+async def test_dead_sandbox_is_replaced() -> None:
+    print("\na sandbox that died behind the proxy's back")
+    async with Harness() as h:
+        await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        key = [item for item in h.backend.created if item.scope and item.scope.user_id == "u1"][0].key
+        before = len(h.backend.created)
+
+        # Point the cached sandbox at a port nothing listens on, the way a
+        # container removed by hand or killed by the OOM killer looks from here.
+        h.manager._sandboxes[key].port = free_port()
+
+        response = await h.client.get("/files/list?directory=/home/user", headers=h.auth("u1"))
+        check("a read is served from a replacement, not refused", response.status_code == 404,
+              f"{response.status_code}: {response.text[:120]}")
+        check("and the dead one was replaced", len(h.backend.created) == before + 1)
+        check("the dead one was cleaned up", len(h.backend.destroyed) == 1)
+
+        h.manager._sandboxes[[i for i in h.manager._sandboxes][0]].port = free_port()
+        response = await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        check("a request with a body asks the caller to repeat it", response.status_code == 503,
+              f"{response.status_code}: {response.text[:120]}")
+        check("with a Retry-After", "retry-after" in response.headers)
+        response = await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        check("and the repeat lands in the new sandbox", response.status_code == 200)
+
+
 async def test_failures() -> None:
     print("\nwhen a sandbox cannot be started")
     from otproxy.sandbox import SandboxError
@@ -600,6 +626,7 @@ async def main() -> int:
     await test_warm_pool()
     await test_policies()
     await test_sandbox_clients_refused()
+    await test_dead_sandbox_is_replaced()
     await test_failures()
     print(f"\n{PASSED} passed, {FAILED} failed")
     return 1 if FAILED else 0
