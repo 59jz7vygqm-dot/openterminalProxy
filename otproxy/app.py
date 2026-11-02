@@ -250,7 +250,24 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
 
     @app.get("/api/config")
     async def api_config() -> Response:
-        return await cached("/api/config")
+        """The image's feature flags, with the operator's overrides applied.
+
+        Open WebUI reads this to decide what to offer in its side pane, so
+        OTPROXY_UI_FEATURES can take a part of that interface away without
+        changing anything inside the sandbox.
+        """
+        answer = await cached("/api/config")
+        if not settings.ui_features or answer.status_code != 200:
+            return answer
+        try:
+            payload = json.loads(bytes(answer.body))
+        except ValueError:
+            return answer
+        features = payload.get("features")
+        if not isinstance(features, dict):
+            features = {}
+        payload["features"] = {**features, **settings.ui_features}
+        return JSONResponse(payload)
 
     @app.get("/share")
     async def share_file(request: Request, path: str = "") -> Response:

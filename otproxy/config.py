@@ -214,6 +214,7 @@ class Settings:
 
     # --- what the pane may show ------------------------------------------
     hide_ports: bool
+    ui_features: Dict[str, Any]
 
     # --- self-checks -----------------------------------------------------
     verify_isolation: bool
@@ -382,6 +383,12 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
         # Nothing the model needs -- the endpoint is not in the schema -- so an
         # operator who does not want that tab populated can empty it here.
         hide_ports=_bool("HIDE_PORTS", False),
+        # Overrides for the feature flags the sandbox reports in /api/config --
+        # which this proxy answers, not the container. Open WebUI's side pane
+        # hides its terminal panel when features.terminal is false, so
+        # {"terminal": false} takes the shell out of the interface while the
+        # sandbox keeps working exactly as before.
+        ui_features=_json_dict("UI_FEATURES"),
         verify_isolation=_bool("VERIFY_ISOLATION", True),
         require_isolation=_bool("REQUIRE_ISOLATION", False),
         # A sandbox shares a bridge with the proxy, so it can reach the proxy's

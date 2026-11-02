@@ -334,6 +334,22 @@ async def test_sharing() -> None:
         check("once the workspace is gone the link says so", response.status_code == 410, response.text[:120])
 
 
+async def test_ui_features() -> None:
+    print("\ntaking parts of the side pane away")
+    async with Harness() as h:
+        features = (await h.client.get("/api/config")).json()["features"]
+        check("by default the image's own flags are passed through",
+              features == {"terminal": True, "notebooks": True, "system": True}, str(features))
+
+    async with Harness(OTPROXY_UI_FEATURES='{"terminal": false}') as h:
+        features = (await h.client.get("/api/config")).json()["features"]
+        check("an override hides the terminal panel", features["terminal"] is False)
+        check("and leaves the other flags alone",
+              features["system"] is True and features["notebooks"] is True, str(features))
+        response = await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        check("while the sandbox itself is untouched", response.status_code == 200)
+
+
 async def test_hide_ports() -> None:
     print("\nwhat the terminal pane may show")
     async with Harness() as open_ports:
@@ -555,6 +571,7 @@ async def main() -> int:
         await test_websocket(h)
         await test_admin(h)
     await test_body_limit()
+    await test_ui_features()
     await test_hide_ports()
     await test_sharing()
     await test_capacity()

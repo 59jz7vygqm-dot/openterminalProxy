@@ -282,16 +282,34 @@ Nutzer mit: Dateien, Ports, Terminal. Die drei lassen sich einzeln entschärfen:
 
 | Was | Wie | Ergebnis |
 |---|---|---|
-| Terminal-Fenster | `OPEN_TERMINAL_ENABLE_TERMINAL=false` in `OTPROXY_SANDBOX_ENV` | die Oberfläche blendet das Terminal aus (`features.terminal !== false`) |
+| Terminal-Fenster | `OTPROXY_UI_FEATURES={"terminal":false}` | die Oberfläche blendet das Terminal aus; die Sandbox bleibt unverändert |
 | Ports-Liste | `OTPROXY_HIDE_PORTS=true` | der Proxy beantwortet `/ports` selbst mit einer leeren Liste |
 | Dateibrowser | `OPEN_TERMINAL_FILE_BROWSER_ROOT=/home/user/public` in `OTPROXY_SANDBOX_ENV` | zeigt nur den Ordner, in den der Agent Ergebnisse legt |
 
 Also zusammen:
 
 ```bash
+OTPROXY_UI_FEATURES={"terminal":false}
 OTPROXY_HIDE_PORTS=true
-OTPROXY_SANDBOX_ENV={"OPEN_TERMINAL_ENABLE_TERMINAL":"false","OPEN_TERMINAL_FILE_BROWSER_ROOT":"/home/user/public"}
+OTPROXY_SANDBOX_ENV={"OPEN_TERMINAL_FILE_BROWSER_ROOT":"/home/user/public"}
 ```
+
+Zwei Wege führen zum verschwundenen Terminal-Fenster, und sie sind nicht
+gleichwertig. `OTPROXY_UI_FEATURES={"terminal":false}` ändert nur, was der
+Proxy in `/api/config` meldet — die Oberfläche blendet das Fenster aus, im
+Container bleibt alles vorhanden, und die Vorschau ist nicht betroffen.
+`OPEN_TERMINAL_ENABLE_TERMINAL=false` nimmt die Routen im Container wirklich
+weg; das ist strenger (auch gegen eine andere Verbindung, die jemand später
+anlegt), kann aber mehr abschalten als beabsichtigt. Fang mit dem ersten an.
+
+Die Shell-Werkzeuge bleiben in beiden Fällen in der Werkzeugliste, solange sie
+im Container existieren — die nimmst du in der Verbindung über die
+Funktionsnamen-Filterliste heraus: `!read_user_terminal,!send_user_terminal_input`.
+
+Was übrig bleibt und nicht wegkonfigurierbar ist: die Zeile „Ports" selbst.
+Mit `HIDE_PORTS=true` ist die Liste leer („No servers detected"), aber die
+aufklappbare Kopfzeile gehört zu Open WebUIs Markup, nicht zu irgendeiner
+Antwort des Proxys.
 
 Ob die Vorschau mit abgeschaltetem Terminal erhalten bleibt, hängt an
 Oberflächen-Code, den ich nicht vollständig gelesen habe: die Vorschau selbst
@@ -420,6 +438,7 @@ beendet den Prozess mit einer Zeile, die die Variable nennt.
 | `OTPROXY_READY_TIMEOUT` | `90` | Wartezeit auf `/health` des Containers. |
 | `OTPROXY_SCOPE_BY_CONTEXT` | `true` | `X-Terminal-Context-Id` (z. B. pro Chat) ergibt eine eigene Sandbox. |
 | `OTPROXY_POLICIES` | `{}` | JSON mit benannten Profilen, erreichbar über `/p/<id>/…`. |
+| `OTPROXY_UI_FEATURES` | `{}` | Überschreibt die Fähigkeiten in `/api/config`, z. B. `{"terminal":false}`, um das Terminal-Fenster auszublenden. |
 | `OTPROXY_HIDE_PORTS` | `false` | `/ports` wird mit einer leeren Liste beantwortet; die Ports-Leiste der Oberfläche bleibt leer. |
 | `OTPROXY_PUBLIC_URL` | — | Adresse, unter der der Browser des Nutzers den Proxy erreicht. Gesetzt = `share_file` existiert. |
 | `OTPROXY_DOWNLOAD_TTL` | `600` | Gültigkeit einer ausgegebenen Datei-URL in Sekunden. |
@@ -661,5 +680,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 285 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 289 Prüfungen,
 alle grün.
