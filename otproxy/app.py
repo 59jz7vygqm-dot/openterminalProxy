@@ -123,7 +123,19 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         return None
 
     def scope_of(request_headers, query, policy_id: str) -> Scope:
-        user_id = request_headers.get("x-user-id") or query.get("user_id") or ""
+        # X-User-Id is what an Open Terminal connection sends.  A generic tool
+        # server or an MCP connection does not send it at all -- those paths
+        # only carry the user's id as X-OpenWebUI-User-Id, and only when the
+        # admin turned ENABLE_FORWARD_USER_INFO_HEADERS on.  Accepting both
+        # means the proxy works either way; it does not make the second one
+        # more trustworthy, since both arrive from the same authenticated
+        # connection.
+        user_id = (
+            request_headers.get("x-user-id")
+            or request_headers.get("x-openwebui-user-id")
+            or query.get("user_id")
+            or ""
+        )
         user_id = ids.check_id(user_id, what="X-User-Id")
         context_id = ""
         if settings.scope_by_context:
@@ -315,7 +327,9 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
 
         chat_id = str(payload.get("chat_id") or "")
         headers = {"X-User-Id": scope.user_id}
-        session_header = ws.headers.get("x-session-id", chat_id)
+        session_header = (
+            ws.headers.get("x-session-id") or ws.headers.get("x-openwebui-chat-id") or chat_id
+        )
         if session_header:
             headers["X-Session-Id"] = session_header
         if scope.context_id:
@@ -357,14 +371,32 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         # user to attribute it to -- and for the literal "system" user Open WebUI
         # uses when it reads a policy's prompt -- it comes from the cache like
         # the schema does, rather than starting a container nobody works in.
-        user = request.headers.get("x-user-id") or request.query_params.get("user_id") or ""
+        user = (
+            request.headers.get("x-user-id")
+            or request.headers.get("x-openwebui-user-id")
+            or request.query_params.get("user_id")
+            or ""
+        )
         if path == "system" and user in ("", "system"):
             return await cached("/system")
         sandbox, failure = await sandbox_for(request, policy_id)
         if failure is not None:
             return failure
         assert sandbox is not None
-        return await state["http"].forward(request, sandbox.base_url, sandbox.api_key, path)
+        extra: Dict[str, str] = {}
+        # The container is told the identity the proxy actually routed on,
+        # under the name Open Terminal reads -- whatever name it arrived under,
+        # and whatever else the caller may have put in that header.
+        if sandbox.scope is not None:
+            extra["X-User-Id"] = sandbox.scope.user_id
+        # Open Terminal tracks the working directory per X-Session-Id.  A
+        # generic tool server sends the chat as X-OpenWebUI-Chat-Id instead, so
+        # it is translated rather than lost.
+        if not request.headers.get("x-session-id") and request.headers.get("x-openwebui-chat-id"):
+            extra["X-Session-Id"] = request.headers["x-openwebui-chat-id"]
+        return await state["http"].forward(
+            request, sandbox.base_url, sandbox.api_key, path, extra_headers=extra or None
+        )
 
     @app.api_route("/p/{policy_id}/{path:path}", methods=ALL_METHODS)
     async def forward_with_policy(policy_id: str, path: str, request: Request) -> Response:

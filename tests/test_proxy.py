@@ -160,6 +160,38 @@ async def test_routing(h: Harness) -> None:
     check("a terminal context gets its own sandbox", len(h.backend.created) == 4)
 
 
+async def test_connection_variants(h: Harness) -> None:
+    print("\nother ways Open WebUI can be wired up")
+    # A generic tool server or MCP connection never sends X-User-Id; with user
+    # info forwarding on it sends X-OpenWebUI-User-Id instead.
+    response = await h.client.post(
+        "/execute", json={"command": "x"},
+        headers={"Authorization": f"Bearer {KEY}", "X-OpenWebUI-User-Id": "user-generic",
+                 "X-OpenWebUI-Chat-Id": "chat-generic"},
+    )
+    check("a tool-server connection is accepted too", response.status_code == 200, response.text[:160])
+    body = response.json()
+    check("the container still gets X-User-Id", body["user"] == "user-generic")
+    check("and the chat id as X-Session-Id", body["session"] == "chat-generic")
+
+    before = len(h.backend.created)
+    response = await h.client.post(
+        "/execute", json={"command": "x"},
+        headers={"Authorization": f"Bearer {KEY}", "X-User-Id": "user-generic"},
+    )
+    check("both spellings land in the same sandbox", len(h.backend.created) == before)
+
+    # Open WebUI can forward the viewer's cookies to a tool server. They are a
+    # session credential and the sandbox runs user code, so they stop here.
+    response = await h.client.post(
+        "/execute", json={"command": "x"},
+        headers={"Authorization": f"Bearer {KEY}", "X-User-Id": "user-cookie",
+                 "Cookie": "token=open-webui-session-jwt"},
+    )
+    check("cookies do not reach the sandbox", response.json()["cookie"] == "",
+          f"container saw {response.json()['cookie']!r}")
+
+
 async def test_streaming_and_limits(h: Harness) -> None:
     print("\nstreaming and body limits")
     response = await h.client.get("/big?n=1048576", headers=h.auth("user-s"))
@@ -439,6 +471,7 @@ async def main() -> int:
         await test_authentication(h)
     async with Harness() as h:
         await test_routing(h)
+        await test_connection_variants(h)
         await test_streaming_and_limits(h)
         await test_websocket(h)
         await test_admin(h)

@@ -183,6 +183,30 @@ In Open WebUI ist die URL dann `http://<diese Adresse>:8800`. Der Key geht damit
 Sandboxes ändert der Port nichts — die Host-Regel verwirft Verkehr aus dem
 Sandbox-Bereich an den Host, und der Proxy weist ihn zusätzlich mit 403 ab.
 
+### Verbindungstyp: Open Terminal, nicht MCP, nicht External Tools
+
+Der Proxy routet anhand des Headers `X-User-Id`. Den schickt Open WebUI **nur**
+für eine Open-Terminal-Verbindung. Der gemeinsame Header-Bau für MCP- und
+OpenAPI-Tool-Server setzt ihn nicht — dort kommt die Nutzer-ID überhaupt nur
+mit, wenn `ENABLE_FORWARD_USER_INFO_HEADERS=true` gesetzt ist, und dann als
+`X-OpenWebUI-User-Id`.
+
+Der Proxy akzeptiert beide Schreibweisen, und übersetzt auch
+`X-OpenWebUI-Chat-Id` in das `X-Session-Id`, das Open Terminal für das
+Arbeitsverzeichnis pro Chat liest. Eine MCP- oder Tool-Server-Verbindung
+funktioniert damit — aber nur mit eingeschalteter Weiterleitung der
+Nutzerinformationen, und ohne sie bekommt **jeder Aufruf eine 400** statt einer
+geteilten Sandbox. Das ist Absicht: ohne Identität keine Zuordnung.
+
+Richtig eingetragen gehört er unter **Admin → Integrationen → Open Terminal**.
+
+**Cookies aus: ja.** „Forward cookies" ist in Open WebUI standardmäßig aus und
+gehört auch aus: der Proxy authentisiert mit dem Bearer-Key und braucht keine.
+Wären sie an, würde die Sitzungs-Cookie des Nutzers an einen Dienst gehen, der
+sie nicht verwendet — deshalb entfernt der Proxy den `Cookie`-Header, bevor er
+eine Anfrage an den Container weitergibt. In einem Container, in dem fremder
+Code läuft, hat eine Open-WebUI-Sitzung nichts zu suchen.
+
 ## Welches Image
 
 | Image | Größe | Für | Nötige Einstellungen |
@@ -481,5 +505,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 256 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 261 Prüfungen,
 alle grün.

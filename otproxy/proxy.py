@@ -50,8 +50,12 @@ HOP_BY_HOP = frozenset(
 )
 
 #: Dropped from the request as well: host belongs to the next hop, the
-#: Authorization header is replaced, and content-length is recomputed.
-REQUEST_DROP = HOP_BY_HOP | {"host", "authorization", "content-length", "expect"}
+#: Authorization header is replaced, content-length is recomputed -- and
+#: cookies have no business here.  Open WebUI can be told to forward the
+#: viewer's session cookies to a tool server; this one authenticates with a
+#: bearer key and the sandbox has no use for them, so they are not passed on to
+#: a container that runs user-supplied code.
+REQUEST_DROP = HOP_BY_HOP | {"host", "authorization", "content-length", "expect", "cookie"}
 
 #: Dropped from the response: the server and date of the sandbox are noise, and
 #: Starlette writes its own.
@@ -64,12 +68,22 @@ class BodyTooLarge(Exception):
     """The request body went past OTPROXY_MAX_BODY."""
 
 
-def request_headers(incoming: Iterable[Tuple[str, str]], api_key: str) -> List[Tuple[bytes, bytes]]:
+def request_headers(
+    incoming: Iterable[Tuple[str, str]], api_key: str, extra: Optional[Dict[str, str]] = None
+) -> List[Tuple[bytes, bytes]]:
+    """Headers for the upstream request: the caller's, minus ours, plus *extra*.
+
+    *extra* wins over anything of the same name in *incoming*, which is how a
+    header Open WebUI only sends under a different name is translated.
+    """
+    overridden = {name.lower() for name in (extra or {})}
     headers = [
         (name.encode("latin-1"), value.encode("latin-1"))
         for name, value in incoming
-        if name.lower() not in REQUEST_DROP
+        if name.lower() not in REQUEST_DROP and name.lower() not in overridden
     ]
+    for name, value in (extra or {}).items():
+        headers.append((name.encode("latin-1"), value.encode("latin-1")))
     headers.append((b"authorization", f"Bearer {api_key}".encode("latin-1")))
     return headers
 
@@ -93,7 +107,14 @@ class HttpForwarder:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def forward(self, request: Request, base_url: str, api_key: str, path: str) -> Response:
+    async def forward(
+        self,
+        request: Request,
+        base_url: str,
+        api_key: str,
+        path: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Response:
         url = httpx.URL(f"{base_url}/{path.lstrip('/')}")
         if request.url.query:
             url = url.copy_with(query=request.url.query.encode("latin-1"))
@@ -105,7 +126,7 @@ class HttpForwarder:
         upstream = self._client.build_request(
             request.method,
             url,
-            headers=request_headers(request.headers.items(), api_key),
+            headers=request_headers(request.headers.items(), api_key, extra_headers),
             content=content,
         )
         try:

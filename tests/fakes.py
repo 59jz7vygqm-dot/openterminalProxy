@@ -84,6 +84,7 @@ class FakeTerminal:
                     "user": headers.get("x-user-id", ""),
                     "session": headers.get("x-session-id", ""),
                     "context": headers.get("x-terminal-context-id", ""),
+                    "cookie": headers.get("cookie", ""),
                 },
             )
         if path == "/files/upload":
