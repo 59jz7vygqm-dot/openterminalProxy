@@ -224,7 +224,7 @@ class DockerSandboxBackend:
         """
         existing = await self.docker.inspect_network(name)
         if existing is not None:
-            await self._join(name)
+            await self.join_network(name)
             return name
 
         for attempt in range(1, 6):
@@ -258,7 +258,7 @@ class DockerSandboxBackend:
                 "something else is allocating out of OTPROXY_NET_SUPERNET"
             )
 
-        await self._join(name)
+        await self.join_network(name)
         return name
 
     async def join_network(self, name: str) -> bool:
@@ -276,9 +276,6 @@ class DockerSandboxBackend:
             return False
         await self.docker.connect_network(name, self_container)
         return True
-
-    async def _join(self, name: str) -> None:
-        await self.join_network(name)
 
     async def _subnets_in_use(self) -> List[str]:
         """Every subnet this daemon knows, ours or not."""

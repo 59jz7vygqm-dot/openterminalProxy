@@ -1,0 +1,27 @@
+# Keeps the sandbox-to-host rule in place across reboots.
+#
+# Install (from the repository, which is where the script lives):
+#
+#   sed -e "s|@SCRIPT@|$PWD/scripts/sandbox-host-firewall.sh|" \
+#       -e "s|@SUPERNET@|10.88.0.0/16|" \
+#       scripts/otproxy-firewall.service.in | sudo tee /etc/systemd/system/otproxy-firewall.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now otproxy-firewall.service
+#   sudo systemctl status otproxy-firewall.service
+#
+# Docker only manages its own chains and FORWARD, so a docker restart does not
+# remove this rule -- but a reboot does, which is what this unit is for.
+[Unit]
+Description=Drop traffic from openterminal-proxy sandboxes to this host
+Documentation=https://github.com/59jz7vygqm-dot/openterminalProxy
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=@SCRIPT@ install @SUPERNET@
+ExecStop=@SCRIPT@ remove @SUPERNET@
+
+[Install]
+WantedBy=multi-user.target

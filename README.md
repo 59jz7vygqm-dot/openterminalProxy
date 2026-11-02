@@ -121,12 +121,29 @@ docker compose up -d --build
 Open WebUI läuft schon? Dann hänge es an das Netz `openterminal-frontend`.
 Noch nicht? `--profile with-openwebui` startet es mit.
 
-**4. Host-Regel setzen** (siehe oben, einmal pro Host, nach jedem Reboot)
+**4. Host-Regel setzen** (siehe oben, einmal pro Host)
 
 ```bash
 sudo scripts/sandbox-host-firewall.sh install 10.88.0.0/16
 sudo scripts/sandbox-host-firewall.sh status  10.88.0.0/16
 ```
+
+Die Regel überlebt keinen Reboot — und das ist der eine Punkt, der still
+kaputtgeht. Dafür liegt eine systemd-Unit dabei:
+
+```bash
+sed -e "s|@SCRIPT@|$PWD/scripts/sandbox-host-firewall.sh|" \
+    -e "s|@SUPERNET@|10.88.0.0/16|" \
+    scripts/otproxy-firewall.service.in | sudo tee /etc/systemd/system/otproxy-firewall.service
+```
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl enable --now otproxy-firewall.service
+```
+
+Ein Docker-Neustart entfernt die Regel nicht — Docker verwaltet nur seine
+eigenen Ketten und FORWARD —, ein Reboot schon. Wer nftables oder firewalld
+benutzt, nimmt dieselben zwei Regeln dort auf.
 
 **5. In Open WebUI eintragen**
 

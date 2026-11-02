@@ -10,8 +10,10 @@
  * the sandbox can reach, it reached with this.
  *
  * Two modes, by argument count:
- *   fakeot                      serve HTTP on :8000
- *   fakeot <host> <port> ...    try to connect to each pair and report
+ *   fakeot                       serve HTTP on :8000
+ *   fakeot <host> <port> ...     try to connect to each pair and report
+ *   fakeot --write <path> <text> write a file
+ *   fakeot --read <path>         print one back
  *
  * Build: gcc -static -O2 -o fakeot fake_terminal.c
  */
@@ -174,15 +176,6 @@ int main(int argc, char **argv) {
         while (fgets(line, sizeof line, handle)) fputs(line, stdout);
         fclose(handle);
         printf("\n");
-        return 0;
-    }
-    if (argc == 2 && strcmp(argv[1], "--mountinfo") == 0) {
-        /* Used once, to confirm that a container can find its own id this way. */
-        FILE *handle = fopen("/proc/self/mountinfo", "r");
-        if (!handle) return 1;
-        char line[4096];
-        while (fgets(line, sizeof line, handle)) fputs(line, stdout);
-        fclose(handle);
         return 0;
     }
     if (argc < 3) return serve();
