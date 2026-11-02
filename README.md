@@ -231,6 +231,38 @@ sie nicht verwendet — deshalb entfernt der Proxy den `Cookie`-Header, bevor er
 eine Anfrage an den Container weitergibt. In einem Container, in dem fremder
 Code läuft, hat eine Open-WebUI-Sitzung nichts zu suchen.
 
+### Dateien an den Nutzer ausliefern
+
+`display_file` liefert **keine Bytes**. Es antwortet nur mit `{"path": ...,
+"exists": true}` und überlässt die Anzeige dem Aufrufer; Open WebUI schickt
+daraufhin ein `terminal:display_file`-Ereignis mit dem Pfad an die Oberfläche,
+und die muss die Datei dann holen. Holen kann sie sie nur über Open WebUIs
+eigene Terminal-Route (`/api/v1/terminals/<id>/...`) — und die gibt es nur für
+eine **Open-Terminal-Verbindung**. Über eine OpenAPI-Tool-Server-Verbindung
+existiert kein Weg, auf dem der Browser an die Datei käme: der API-Schlüssel
+liegt serverseitig.
+
+Folge: mit einer OpenAPI-Verbindung erscheint nichts, egal was das Modell tut —
+und das Modell merkt es nicht, weil es `exists: true` zurückbekommt und daraus
+schließt, die Anzeige sei erfolgt. (Nachgelesen im Backend von Open WebUI; die
+Oberfläche selbst habe ich nicht gelesen.)
+
+Drei Möglichkeiten:
+
+1. **Open-Terminal-Verbindung**, dafür mit abgeschaltetem Terminal
+   (`OPEN_TERMINAL_ENABLE_TERMINAL=false`, siehe unten). Dann gibt es die
+   Vorschau und keinen Shell-Zugang. Zeigt die Oberfläche zusätzlich einen
+   Dateibrowser, sieht darin ohnehin jeder nur seinen eigenen Container — und
+   mit `OPEN_TERMINAL_FILE_BROWSER_ROOT=/home/user/public` nur den Ordner, in
+   den der Agent absichtlich etwas legt.
+2. **Bei der OpenAPI-Verbindung bleiben** und `display_file` aus der
+   Werkzeugliste nehmen (`!display_file` in der Filterliste), damit das Modell
+   nicht behauptet, etwas angezeigt zu haben. Textinhalte kann es dann direkt
+   in die Antwort schreiben; Binärdateien bleiben in der Sandbox.
+3. Einen Pfad in die Sandbox mounten, den auch etwas anderes ausliefert. Das
+   ist ein bewusst geöffnetes Loch in der Isolation — dokumentiert, nicht
+   empfohlen.
+
 ### Nur der Agent, kein Nutzer-Terminal
 
 Wer will, dass das Modell rechnet und Dateien schreibt, aber **kein Mensch**
