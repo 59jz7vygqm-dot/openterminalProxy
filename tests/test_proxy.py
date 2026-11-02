@@ -31,6 +31,11 @@ PASSED = 0
 FAILED = 0
 
 
+async def _streamed(payload: bytes):
+    """A body httpx sends chunked, so the proxy cannot hold it for a retry."""
+    yield payload
+
+
 def check(name: str, condition: bool, detail: str = "") -> None:
     global PASSED, FAILED
     if condition:
@@ -582,12 +587,25 @@ async def test_dead_sandbox_is_replaced() -> None:
         check("and the dead one was replaced", len(h.backend.created) == before + 1)
         check("the dead one was cleaned up", len(h.backend.destroyed) == 1)
 
+        # A tool call is a small JSON body: the proxy holds it and sends it to
+        # the replacement itself, so the caller never sees the failure.
         h.manager._sandboxes[[i for i in h.manager._sandboxes][0]].port = free_port()
-        response = await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
-        check("a request with a body asks the caller to repeat it", response.status_code == 503,
-              f"{response.status_code}: {response.text[:120]}")
+        response = await h.client.post("/execute", json={"command": "still-arrives"}, headers=h.auth("u1"))
+        check("a small body is replayed into the replacement", response.status_code == 200,
+              f"{response.status_code}: {response.text[:160]}")
+        check("with the body intact",
+              json.loads(response.json()["echo"])["command"] == "still-arrives")
+
+        # An upload streams and cannot be repeated, so the caller is asked to.
+        h.manager._sandboxes[[i for i in h.manager._sandboxes][0]].port = free_port()
+        response = await h.client.post(
+            "/files/upload", content=_streamed(b"x" * 64),
+            headers={**h.auth("u1"), "Content-Type": "application/octet-stream"},
+        )
+        check("a streamed body asks the caller to repeat it", response.status_code == 503,
+              f"{response.status_code}: {response.text[:160]}")
         check("with a Retry-After", "retry-after" in response.headers)
-        response = await h.client.post("/execute", json={"command": "x"}, headers=h.auth("u1"))
+        response = await h.client.post("/files/upload", content=b"x" * 64, headers=h.auth("u1"))
         check("and the repeat lands in the new sandbox", response.status_code == 200)
 
 

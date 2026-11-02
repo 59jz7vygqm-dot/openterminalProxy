@@ -586,11 +586,12 @@ Der schnelle Pfad gibt eine bekannte, bereite Sandbox heraus, ohne Docker zu
 fragen, ob sie noch lebt — diese Prüfung wäre ein Rundgang pro Anfrage. Stirbt
 der Container zwischendurch (OOM-Kill, ein `docker rm` von Hand), merkt der
 Proxy es an der ersten Anfrage, die nicht mehr durchkommt: er wirft die
-Sandbox weg, legt eine neue an und beantwortet lesende Anfragen direkt aus der
-neuen. Anfragen mit Inhalt (ein `POST /execute`) bekommen eine `503` mit
-`Retry-After: 1` und der Bitte, es noch einmal zu senden — der Körper ist zu
-diesem Zeitpunkt schon stromabwärts gegangen und lässt sich nicht
-wiederholen.
+Sandbox weg, legt eine neue an und schickt die Anfrage dorthin. Ein kleiner
+Körper — und ein Werkzeugaufruf ist ein winziges JSON-Objekt — wird dafür
+zwischengehalten, bis zu 1 MiB und nie über `OTPROXY_MAX_BODY`; der Aufrufer
+merkt von dem Ausfall nichts. Nur ein gestreamter Körper, also ein echter
+Upload, lässt sich nicht wiederholen: der bekommt eine `503` mit
+`Retry-After: 1` und der Bitte, es noch einmal zu senden.
 
 ### Was mit einem Container passiert, wenn er geht
 
@@ -724,5 +725,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 301 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 303 Prüfungen,
 alle grün.

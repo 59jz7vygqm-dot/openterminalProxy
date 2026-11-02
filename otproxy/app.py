@@ -534,16 +534,18 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         # it is translated rather than lost.
         if not request.headers.get("x-session-id") and request.headers.get("x-openwebui-chat-id"):
             extra["X-Session-Id"] = request.headers["x-openwebui-chat-id"]
+        # A small body is held in memory so that a dead sandbox can be replaced
+        # without the caller noticing; an upload keeps streaming and cannot be
+        # repeated.
+        body = await state["http"].read_replayable(request)
         try:
             return await state["http"].forward(
-                request, sandbox.base_url, sandbox.api_key, path, extra_headers=extra or None
+                request, sandbox.base_url, sandbox.api_key, path,
+                extra_headers=extra or None, replayable_body=body,
             )
         except UpstreamUnreachable:
-            # The sandbox died since we last spoke to it.  Replace it and try
-            # once -- a body already streamed upstream cannot be sent again, so
-            # only requests without one are retried.
             await mgr().invalidate(sandbox)
-            if request.method.upper() not in ("GET", "HEAD", "OPTIONS"):
+            if body is None and request.method.upper() not in ("GET", "HEAD", "OPTIONS"):
                 return JSONResponse(
                     {"detail": "the sandbox had to be restarted, please send that again"},
                     status_code=503,
@@ -555,7 +557,8 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
             assert replacement is not None
             try:
                 return await state["http"].forward(
-                    request, replacement.base_url, replacement.api_key, path, extra_headers=extra or None
+                    request, replacement.base_url, replacement.api_key, path,
+                    extra_headers=extra or None, replayable_body=body,
                 )
             except UpstreamUnreachable:
                 return JSONResponse({"detail": "the sandbox is not reachable"}, status_code=502)

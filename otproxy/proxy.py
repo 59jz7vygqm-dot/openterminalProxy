@@ -96,6 +96,12 @@ def response_headers(incoming: Iterable[Tuple[str, str]]) -> Dict[str, str]:
     return {name: value for name, value in incoming if name.lower() not in RESPONSE_DROP}
 
 
+#: A body up to this size is read into memory before it is forwarded, so the
+#: request can be sent a second time if the sandbox turns out to be dead.  Tool
+#: calls are small JSON objects; a file upload is not, and keeps streaming.
+REPLAYABLE_BODY_LIMIT = 1024 * 1024
+
+
 class HttpForwarder:
     def __init__(self, *, request_timeout: float, connect_timeout: float, max_body: int) -> None:
         self._client = httpx.AsyncClient(
@@ -118,14 +124,18 @@ class HttpForwarder:
         api_key: str,
         path: str,
         extra_headers: Optional[Dict[str, str]] = None,
+        replayable_body: Optional[bytes] = None,
     ) -> Response:
         url = httpx.URL(f"{base_url}/{path.lstrip('/')}")
         if request.url.query:
             url = url.copy_with(query=request.url.query.encode("latin-1"))
 
-        content: Optional[AsyncIterator[bytes]] = None
+        content: Optional[Any] = None
         if request.method.upper() not in METHODS_WITHOUT_BODY:
-            content = self._limited(request)
+            if replayable_body is not None:
+                content = replayable_body
+            else:
+                content = self._limited(request)
 
         upstream = self._client.build_request(
             request.method,
@@ -164,6 +174,23 @@ class HttpForwarder:
         """Open a streamed GET against a sandbox.  The caller closes it."""
         request = self._client.build_request("GET", url, headers={"Authorization": f"Bearer {api_key}"})
         return await self._client.send(request, stream=True)
+
+    async def read_replayable(self, request: Request) -> Optional[bytes]:
+        """Read a small body into memory so a retry can send it again.
+
+        Returns None when the body is absent or too big to hold, in which case
+        it is streamed and a failed attempt cannot be repeated.
+        """
+        if request.method.upper() in METHODS_WITHOUT_BODY:
+            return None
+        # Never above the configured body limit: a body that is too large must
+        # be refused by the streaming path, not quietly waved through here.
+        ceiling = min(REPLAYABLE_BODY_LIMIT, self._max_body or REPLAYABLE_BODY_LIMIT)
+        declared = request.headers.get("content-length")
+        if declared is None or not declared.isdigit() or int(declared) > ceiling:
+            return None
+        body = await request.body()
+        return body if len(body) <= ceiling else None
 
     async def _limited(self, request: Request) -> AsyncIterator[bytes]:
         seen = 0
