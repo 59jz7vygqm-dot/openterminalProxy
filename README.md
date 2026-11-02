@@ -263,7 +263,43 @@ Nach dem Einschalten die Verbindung in Open WebUI einmal neu speichern — die
 Werkzeugliste wird dort zwischengespeichert, und `share_file` erscheint erst
 beim nächsten Lesen von `/openapi.json`.
 
-#### Warum `display_file` das nicht kann
+#### Vorschau im Chat: nur mit der Open-Terminal-Verbindung
+
+Wenn es die **Vorschau im Chatfenster** sein soll — nicht ein Link —, führt
+kein Weg an der Verbindung unter **Admin → Integrationen → Open Terminal**
+vorbei. Nachgelesen in der Oberfläche von Open WebUI:
+`getInlineFileFromToolOutput` zeigt eine Datei nur, wenn das Werkzeugergebnis
+`source: "open_terminal"` und einen `terminal_selector` trägt, und
+`resolveTerminalConnection` macht daraus nur dann eine abrufbare Adresse, wenn
+der Selektor die **ID einer Terminal-Verbindung** ist (dann holt der Browser
+die Datei über `/api/v1/terminals/<id>/files/view` mit der eigenen Anmeldung).
+Bei einer OpenAPI- oder MCP-Verbindung ist der Selektor die bloße URL, die
+Auflösung schlägt fehl, und es erscheint nichts — ohne Fehlermeldung, weshalb
+das Modell behauptet, es habe die Datei angezeigt.
+
+Mit der Open-Terminal-Verbindung kommt allerdings die Seitenleiste für den
+Nutzer mit: Dateien, Ports, Terminal. Die drei lassen sich einzeln entschärfen:
+
+| Was | Wie | Ergebnis |
+|---|---|---|
+| Terminal-Fenster | `OPEN_TERMINAL_ENABLE_TERMINAL=false` in `OTPROXY_SANDBOX_ENV` | die Oberfläche blendet das Terminal aus (`features.terminal !== false`) |
+| Ports-Liste | `OTPROXY_HIDE_PORTS=true` | der Proxy beantwortet `/ports` selbst mit einer leeren Liste |
+| Dateibrowser | `OPEN_TERMINAL_FILE_BROWSER_ROOT=/home/user/public` in `OTPROXY_SANDBOX_ENV` | zeigt nur den Ordner, in den der Agent Ergebnisse legt |
+
+Also zusammen:
+
+```bash
+OTPROXY_HIDE_PORTS=true
+OTPROXY_SANDBOX_ENV={"OPEN_TERMINAL_ENABLE_TERMINAL":"false","OPEN_TERMINAL_FILE_BROWSER_ROOT":"/home/user/public"}
+```
+
+Ob die Vorschau mit abgeschaltetem Terminal erhalten bleibt, hängt an
+Oberflächen-Code, den ich nicht vollständig gelesen habe: die Vorschau selbst
+hängt an `terminal_selector`, nicht an `features.terminal`. Probier es in
+dieser Reihenfolge aus — erst die Verbindung umstellen und die Vorschau
+prüfen, dann die drei Schalter einzeln dazu.
+
+#### Warum `display_file` ohne diese Verbindung nichts anzeigt
 
 `display_file` liefert **keine Bytes**. Es antwortet nur mit `{"path": ...,
 "exists": true}` und überlässt die Anzeige dem Aufrufer; Open WebUI schickt
@@ -384,6 +420,7 @@ beendet den Prozess mit einer Zeile, die die Variable nennt.
 | `OTPROXY_READY_TIMEOUT` | `90` | Wartezeit auf `/health` des Containers. |
 | `OTPROXY_SCOPE_BY_CONTEXT` | `true` | `X-Terminal-Context-Id` (z. B. pro Chat) ergibt eine eigene Sandbox. |
 | `OTPROXY_POLICIES` | `{}` | JSON mit benannten Profilen, erreichbar über `/p/<id>/…`. |
+| `OTPROXY_HIDE_PORTS` | `false` | `/ports` wird mit einer leeren Liste beantwortet; die Ports-Leiste der Oberfläche bleibt leer. |
 | `OTPROXY_PUBLIC_URL` | — | Adresse, unter der der Browser des Nutzers den Proxy erreicht. Gesetzt = `share_file` existiert. |
 | `OTPROXY_DOWNLOAD_TTL` | `600` | Gültigkeit einer ausgegebenen Datei-URL in Sekunden. |
 | `OTPROXY_DOWNLOAD_SECRET` | aus dem API-Key | Signaturgeheimnis für die URLs. |
@@ -624,5 +661,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 281 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 285 Prüfungen,
 alle grün.

@@ -334,6 +334,21 @@ async def test_sharing() -> None:
         check("once the workspace is gone the link says so", response.status_code == 410, response.text[:120])
 
 
+async def test_hide_ports() -> None:
+    print("\nwhat the terminal pane may show")
+    async with Harness() as open_ports:
+        response = await open_ports.client.get("/ports", headers=open_ports.auth("u1"))
+        check("by default the port list is passed through",
+              response.json()["ports"] and response.json()["ports"][0]["port"] == 8000)
+
+    async with Harness(OTPROXY_HIDE_PORTS="true") as hidden:
+        response = await hidden.client.get("/ports", headers=hidden.auth("u1"))
+        check("with HIDE_PORTS the list is empty", response.json() == {"ports": []})
+        check("and no sandbox was started for it", not hidden.backend.created)
+        response = await hidden.client.post("/execute", json={"command": "x"}, headers=hidden.auth("u1"))
+        check("everything else still works", response.status_code == 200)
+
+
 async def test_capacity() -> None:
     print("\ncapacity")
     async with Harness(OTPROXY_MAX_SANDBOXES="2", OTPROXY_EVICT_MIN_IDLE="3600") as h:
@@ -540,6 +555,7 @@ async def main() -> int:
         await test_websocket(h)
         await test_admin(h)
     await test_body_limit()
+    await test_hide_ports()
     await test_sharing()
     await test_capacity()
     await test_reaper()

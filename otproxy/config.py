@@ -212,6 +212,9 @@ class Settings:
     max_body_bytes: int
     schema_ttl: float
 
+    # --- what the pane may show ------------------------------------------
+    hide_ports: bool
+
     # --- self-checks -----------------------------------------------------
     verify_isolation: bool
     require_isolation: bool
@@ -375,6 +378,10 @@ def load(environ: Optional[Dict[str, str]] = None) -> Settings:
         connect_timeout=_float("CONNECT_TIMEOUT", 5.0, minimum=0.1),
         max_body_bytes=parse_size(_str("MAX_BODY", "1g"), what="OTPROXY_MAX_BODY"),
         schema_ttl=_float("SCHEMA_TTL", 300.0, minimum=0.0),
+        # Open WebUI's terminal pane lists the ports a sandbox is listening on.
+        # Nothing the model needs -- the endpoint is not in the schema -- so an
+        # operator who does not want that tab populated can empty it here.
+        hide_ports=_bool("HIDE_PORTS", False),
         verify_isolation=_bool("VERIFY_ISOLATION", True),
         require_isolation=_bool("REQUIRE_ISOLATION", False),
         # A sandbox shares a bridge with the proxy, so it can reach the proxy's

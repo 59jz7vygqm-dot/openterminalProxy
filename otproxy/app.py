@@ -496,6 +496,10 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         )
         if path == "system" and user in ("", "system"):
             return await cached("/system")
+        # Answered without asking a sandbox: the port list only feeds the pane's
+        # Ports tab, and an operator may want that tab to stay empty.
+        if settings.hide_ports and path.strip("/") == "ports":
+            return JSONResponse({"ports": []})
         sandbox, failure = await sandbox_for(request, policy_id)
         if failure is not None:
             return failure

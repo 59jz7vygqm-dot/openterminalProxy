@@ -87,6 +87,8 @@ class FakeTerminal:
                     "cookie": headers.get("cookie", ""),
                 },
             )
+        if path == "/ports":
+            return await _json(send, 200, {"ports": [{"port": 8000, "process": "python3"}]})
         if path == "/files/display":
             wanted = dict(_pairs(scope["query_string"].decode())).get("path", "")
             return await _json(send, 200, {"path": wanted, "exists": "missing" not in wanted})
