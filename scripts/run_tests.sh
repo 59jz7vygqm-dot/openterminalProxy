@@ -6,7 +6,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 failed=0
-for test in tests/test_units.py tests/test_proxy.py tests/test_docker.py; do
+for test in tests/test_units.py tests/test_proxy.py tests/test_aimon.py tests/test_docker.py; do
   [[ -f "$test" ]] || continue
   echo "=============================================================="
   echo "  $test"

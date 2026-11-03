@@ -616,6 +616,95 @@ weder der von Open WebUI noch die der Container.
 
 ---
 
+## Telemetrie an aimonitor
+
+Aus unless `AIMON_URL` gesetzt ist. Dann meldet der Proxy alle 10 Sekunden
+seinen Zustand an `POST <AIMON_URL>/api/v1/ingest/scaler` und jedes
+Skalierungs-Ereignis zusätzlich einzeln.
+
+```
+AIMON_URL=http://aimon.lan:8420
+AIMON_TOKEN=<Token mit Scope ingest>
+AIMON_NODE=proxy-host-01
+```
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `AIMON_URL` | — | Leer = die ganze Telemetrie ist aus, es läuft kein zusätzlicher Task. |
+| `AIMON_TOKEN` | — | Wird als `Authorization: Bearer` geschickt. |
+| `AIMON_NODE` | Hostname | Maschinenname. **Setzen**: im Container ist der Hostname die Container-ID, und der Proxy warnt dann im Log. |
+| `AIMON_SERVICE_KEY` | `openterminal-proxy@<node>:<port>` | Dienstschlüssel. |
+| `AIMON_SERVICE_BASE_URL` | — | Nur gesetzt, wenn du sie angibst; der Proxy kennt seine von außen sichtbare Adresse nicht. |
+| `AIMON_INTERVAL` | `10` | Sekunden zwischen zwei Zustandsmeldungen. |
+| `AIMON_TIMEOUT` | `5` | Nach so vielen Sekunden wird ein Versuch aufgegeben. |
+| `AIMON_BUFFER_SECONDS` | `600` | Ringpuffer; bei 10 s Intervall also 60 Batches, die ältesten fallen heraus. |
+
+### Was „Instanz" hier bedeutet
+
+Dieser Proxy gibt jedem Nutzer genau einen Container. Instanz und Sitzung sind
+hier also dasselbe, und das macht die Zuordnung ungewöhnlich genug, um sie
+aufzuschreiben — gebaut wird sie in `SandboxManager.telemetry_snapshot()`:
+
+| Feld | Woher |
+|---|---|
+| `instances_running` | `_sandboxes`, gezählt werden die mit `ready=True` — die, die jetzt bedienen können. Pool-Container zählen **nicht** mit: ein nicht übergebener Container bedient niemanden. |
+| `instances_starting` | noch nicht bereite Sandboxes plus `_warm` (der Pool). |
+| `instances_draining` | immer `0` — es gibt keine Drain-Phase, Entfernen ist sofortig. |
+| `instances_desired` | `len(_sandboxes)` plus `POOL_SIZE`: jeder Geltungsbereich, der gerade eine Sandbox will. Eine dauerhafte Lücke zu `running` heißt, Container kommen nicht hoch. |
+| `instances_min` | `OTPROXY_POOL_SIZE` — was ohne Nachfrage läuft. |
+| `instances_max` | `OTPROXY_MAX_SANDBOXES`, die harte Decke. |
+| `sessions_active` | identisch mit `instances_running`, von der Bauart her. |
+| `sessions_per_instance_target` | `1`, ebenfalls von der Bauart her. |
+| `sessions_queued` | immer `0`: an der Decke lehnt der Proxy mit 503 ab statt zu queuen — und meldet das als `scale.blocked`. |
+| `scale_cooldown_s_remaining` | immer `0`, es gibt keinen Cooldown. |
+| `cpu_pct`, `mem_used_bytes`, `mem_total_bytes` | gemessen aus `/proc/stat` und `/proc/meminfo`, also der **Host**. Erste Messung liefert kein `cpu_pct` (sie legt die Basis), die zweite schon. |
+| `instances[].id` | Container-ID, auf 12 Zeichen gekürzt. Der *Name* enthält den Hash des Nutzer-Geltungsbereichs und wird deshalb bewusst nicht geschickt. |
+
+Nicht geschickt, weil nicht gemessen: `instances[].cpu_pct` und
+`instances[].mem_used_bytes` (das wäre ein Docker-stats-Aufruf pro Container
+pro Zyklus), `instances[].port` (eine Sandbox veröffentlicht keinen Port) und
+`service.base_url`, solange `AIMON_SERVICE_BASE_URL` nicht gesetzt ist.
+`headroom`, `saturation` und `capacity_sessions` rechnet aimonitor selbst —
+doppelt gerechnet geht irgendwann auseinander.
+
+### Ereignisse
+
+| Wann | `kind` |
+|---|---|
+| Sandbox für einen Nutzer erzeugt oder aus dem Pool übergeben | `scale.up` |
+| Sandbox wegen Leerlauf, Lebensdauer, Verdrängung entfernt | `scale.down` |
+| An der Decke, nichts verdrängbar → 503 an den Aufrufer | `scale.blocked`, `warning`, `dedup_key: scale.blocked:max` |
+| Sandbox kam nicht hoch | `scale.failed`, `error`, `detail.error` = `create_failed` oder `not_ready` |
+| Laufende Sandbox antwortet nicht mehr | `instance.unhealthy` |
+
+`scale.blocked` ist das Ereignis, das erklärt, warum Nutzer warten, obwohl der
+Proxy gesund aussieht.
+
+### Verhalten, wenn aimonitor nicht da ist
+
+Senden läuft in einem eigenen Task; nichts im Datenpfad wartet darauf. Fehlt
+die Antwort, bleibt der Batch im Ringpuffer und der nächste Versuch wartet 1,
+2, 4 … bis maximal 60 Sekunden mit Jitter. `429` respektiert `Retry-After`.
+Ein `4xx` wird **nicht** wiederholt — der Batch fliegt weg, und die Beschwerde
+steht einmal im Log, nicht in jedem Zyklus. Ein Fehler in der Telemetrie kann
+den Proxy nicht anhalten: jeder Zyklus läuft in `try/except`, und der
+Ringpuffer ist nach oben begrenzt.
+
+### Selbsttest
+
+```bash
+docker exec otproxy python -m otproxy --aimon-test
+```
+
+```
+POST http://aimon.lan:8420/api/v1/ingest/scaler -> 202 {"accepted": 2, "rejected": 0, "errors": []}
+```
+
+Mit `--dry-run` hängt er `?dry_run=1` an: aimonitor validiert dann und
+speichert nichts. Der Batch ist als Selbsttest markiert
+(`events[0].detail.self_test = true`), damit niemand ihn für eine echte
+Skalierung hält.
+
 ## Was geschützt ist, und was nicht
 
 Geschützt:
@@ -725,5 +814,5 @@ scripts/run_tests.sh
   dem Pool, Adoption nach Neustart, Räumung von Container und Netz. Ohne
   Daemon/gcc meldet er den Grund und ist zufrieden.
 
-Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 303 Prüfungen,
+Zuletzt ausgeführt gegen Docker 29.9.2 (API 1.56), Python 3.13: 391 Prüfungen,
 alle grün.

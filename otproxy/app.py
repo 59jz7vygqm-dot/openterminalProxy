@@ -29,6 +29,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from starlette.background import BackgroundTask
 
 from . import config, ids, log, share
+from . import __version__
+from .aimon import AimonConfig, NoTelemetry, Telemetry
 from .ids import InvalidIdentity, Scope
 from .manager import CapacityError, SandboxManager
 from .proxy import HttpForwarder, UpstreamUnreachable, WebSocketForwarder
@@ -61,7 +63,29 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         state["started"] = time.time()
         for note in settings.notes:
             logger.warning("%s", note)
+
+        # Telemetry is off unless AIMON_URL is set, and nothing below waits on
+        # it: the manager only ever appends to its queue.  Setting it up is
+        # wrapped as well -- the proxy must come up even if the monitoring
+        # cannot.
+        telemetry: Any = NoTelemetry()
+        try:
+            aimon = AimonConfig.from_env(settings.port, __version__)
+            if aimon.enabled:
+                telemetry = Telemetry(aimon, snapshot=state["manager"].telemetry_snapshot)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telemetry could not be configured, continuing without it: %s", exc)
+            telemetry = NoTelemetry()
+        state["manager"].telemetry = telemetry
+        state["telemetry"] = telemetry
+
         await state["manager"].start()
+        try:
+            await telemetry.start()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("telemetry could not be started, continuing without it: %s", exc)
+            state["manager"].telemetry = NoTelemetry()
+            state["telemetry"] = state["manager"].telemetry
         logger.info(
             "listening on %s:%d -- image=%s limit=%d idle=%.0fs network=%s",
             settings.host, settings.port, settings.image, settings.max_sandboxes,
@@ -70,6 +94,7 @@ def create_app(settings: Optional[config.Settings] = None, manager: Optional[San
         try:
             yield
         finally:
+            await state["telemetry"].close()
             await state["http"].close()
             await state["manager"].close()
 

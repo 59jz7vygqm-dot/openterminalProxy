@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from . import log
+from .aimon import NoTelemetry
 from .config import Policy, Settings
 from .dockerapi import DockerError
 from .ids import Scope
@@ -85,6 +86,9 @@ class SandboxManager:
         self._probe = httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=2.0), trust_env=False, follow_redirects=False
         )
+        #: Replaced by the app when AIMON_URL is set.  Reporting never blocks
+        #: anything here: every call below only appends to a bounded queue.
+        self.telemetry: Any = NoTelemetry()
 
     # ------------------------------------------------------------------
     # start / stop
@@ -203,13 +207,19 @@ class SandboxManager:
                     "and OTPROXY_REQUIRE_ISOLATION is set"
                 )
             await self._make_room()
-            sandbox = await self._provision(scope, policy)
+            try:
+                sandbox = await self._provision(scope, policy)
+            except Exception as exc:
+                self._stats["failed"] += 1
+                self._report_failure("create_failed", exc)
+                raise
             self._sandboxes[key] = sandbox
             try:
                 await self._wait_ready(sandbox)
-            except Exception:
+            except Exception as exc:
                 await self._forget(sandbox, destroy=True)
                 self._stats["failed"] += 1
+                self._report_failure("not_ready", exc)
                 raise
             await self._prepare(sandbox)
             sandbox.touch()
@@ -254,10 +264,12 @@ class SandboxManager:
                 claimed = await self.backend.claim_warm(warm, scope, policy)
                 self._stats["claimed_warm"] += 1
                 logger.info("handed warm container to %s", scope.describe())
+                self._report_scale("up", source="warm_pool")
                 return claimed
         created = await self.backend.create(scope=scope, policy=policy)
         self._stats["created"] += 1
         logger.info("created sandbox %s for %s", created.name, scope.describe())
+        self._report_scale("up", source="created")
         return created
 
     async def _image_of(self, sandbox: Sandbox) -> str:
@@ -328,6 +340,7 @@ class SandboxManager:
             warm = self._warm.pop()
             logger.info("dropping a warm container to make room")
             await self._destroy_quietly(warm)
+            self._report_scale("down", reason="dropped a warm container to make room")
         if self.in_use < limit:
             return
         if for_warm:
@@ -345,6 +358,21 @@ class SandboxManager:
             logger.warning(
                 "at the ceiling of %d sandboxes and all of them are active: refusing the request", limit
             )
+            # The event that explains why users wait while the proxy looks
+            # healthy.  Deduplicated, or a sustained overload fills the log.
+            self.telemetry.event(
+                "scale.blocked",
+                f"At the ceiling of {limit} sandboxes, none idle enough to evict",
+                severity="warning",
+                dedup_key="scale.blocked:max",
+                reason=f"instances_running={len(self._sandboxes)} == instances_max={limit}",
+                detail={
+                    "trigger_metric": "instances_running",
+                    "trigger_value": len(self._sandboxes),
+                    "limit": limit,
+                    "blocked_by": "max",
+                },
+            )
             raise CapacityError(retry_after=max(10, int(self.settings.evict_min_idle)))
         victim = max(evictable, key=lambda item: item.idle_seconds)
         logger.info(
@@ -352,6 +380,10 @@ class SandboxManager:
         )
         self._stats["evicted"] += 1
         await self._forget(victim, destroy=True)
+        self._report_scale(
+            "down",
+            reason=f"evicted after {victim.idle_seconds:.0f}s idle to make room at the ceiling of {limit}",
+        )
 
     # ------------------------------------------------------------------
     # removal
@@ -386,6 +418,12 @@ class SandboxManager:
             if current is not None and current.container_id == sandbox.container_id:
                 logger.warning("sandbox %s stopped answering, replacing it", sandbox.name)
                 await self._forget(current, destroy=True)
+                self.telemetry.event(
+                    "instance.unhealthy",
+                    "A running sandbox stopped answering and was removed",
+                    severity="warning",
+                    detail={"instance": sandbox.container_id[:12]},
+                )
 
     def lookup(self, key: str) -> Optional[Sandbox]:
         """The sandbox for *key* if one is running.  Never starts one."""
@@ -430,6 +468,7 @@ class SandboxManager:
                 logger.info("removing sandbox %s: %s", sandbox.name, reason)
                 self._stats["reaped"] += 1
                 await self._forget(sandbox, destroy=True)
+                self._report_scale("down", reason=reason)
         for key, lock in list(self._locks.items()):
             if key not in self._sandboxes and not lock.locked():
                 self._locks.pop(key, None)
@@ -646,6 +685,113 @@ class SandboxManager:
     # reporting
     # ------------------------------------------------------------------
 
+    def _serving(self) -> List[Sandbox]:
+        """Sandboxes that are ready and belong to someone -- one user each."""
+        return [sandbox for sandbox in self._sandboxes.values() if sandbox.ready]
+
+    def _report_scale(self, direction: str, *, reason: str = "", source: str = "") -> None:
+        """Report one capacity change.
+
+        ``from``/``to`` are the number of sandboxes serving a user before and
+        after this action.  The "up" hooks run before the new container is
+        ready, the "down" hooks after the old one is gone, so the count is
+        adjusted by one accordingly rather than read twice.
+        """
+        serving = len(self._serving())
+        before, after = (serving, serving + 1) if direction == "up" else (serving + 1, serving)
+        detail: Dict[str, Any] = {
+            "from": before,
+            "to": after,
+            "trigger_metric": "sessions_active",
+            "trigger_value": after if direction == "up" else before,
+        }
+        if source:
+            detail["source"] = source
+        self.telemetry.event(
+            f"scale.{direction}",
+            f"Scale {direction}: {before} -> {after} sandboxes",
+            detail=detail,
+            reason=reason or "a user without a sandbox made a request",
+        )
+
+    def _report_failure(self, error_class: str, exc: BaseException) -> None:
+        """Report a sandbox that did not come up.  Error class, not a stacktrace."""
+        self.telemetry.event(
+            "scale.failed",
+            "A sandbox failed to start",
+            severity="error",
+            reason=error_class,
+            detail={"error": error_class, "message": str(exc).splitlines()[0][:200]},
+        )
+
+    def telemetry_snapshot(self) -> Dict[str, Any]:
+        """The proxy's state in aimonitor's vocabulary.
+
+        One container here serves exactly one user, so an instance and a
+        session are the same thing in this proxy.  That makes the mapping
+        unusual enough to write down:
+
+        ``instances_running``  ready sandboxes that belong to a user -- the ones
+                               that can serve right now.  Warm containers are
+                               not counted: one cannot serve anybody until it is
+                               claimed, and claiming is what assigns it.
+        ``instances_starting`` sandboxes created but not ready yet, plus the
+                               warm pool.
+        ``instances_draining`` always 0: removal is immediate, there is no
+                               drain phase to be in.
+        ``instances_desired``  every scope that currently wants a sandbox, plus
+                               the warm pool's target.  A gap that stays open
+                               means containers are failing to start.
+        ``instances_min``      the warm pool size: what runs without demand.
+        ``instances_max``      OTPROXY_MAX_SANDBOXES, the hard ceiling.
+        ``sessions_active``    same as instances_running, by construction.
+        ``sessions_per_instance_target`` 1, also by construction.
+        ``sessions_queued``    always 0: at the ceiling the proxy refuses with
+                               503 instead of queueing, and says so as a
+                               scale.blocked event.
+        ``scale_cooldown_s_remaining`` always 0: there is no cooldown.
+
+        Left out on purpose, because this proxy does not measure them:
+        per-instance CPU and memory (one Docker stats call per container per
+        cycle), and ``instances[].port`` (a sandbox publishes no port).
+        """
+        serving = self._serving()
+        starting = [sandbox for sandbox in self._sandboxes.values() if not sandbox.ready]
+        state: Dict[str, Any] = {
+            "instances_running": len(serving),
+            "instances_desired": len(self._sandboxes) + self.settings.pool_size,
+            "instances_min": self.settings.pool_size,
+            "instances_max": self.settings.max_sandboxes,
+            "instances_starting": len(starting) + len(self._warm),
+            "instances_draining": 0,
+            "sessions_active": len(serving),
+            "sessions_per_instance_target": 1,
+            "sessions_queued": 0,
+            "scale_cooldown_s_remaining": 0,
+        }
+        instances: List[Dict[str, Any]] = []
+        for sandbox in list(self._sandboxes.values()):
+            instances.append(
+                {
+                    # A technical id. The container's *name* carries the hash of
+                    # the user's scope, so it is deliberately not sent.
+                    "id": sandbox.container_id[:12],
+                    "state": "running" if sandbox.ready else "starting",
+                    "sessions": 1 if sandbox.ready else 0,
+                    "started_at": int(sandbox.created),
+                }
+            )
+        for warm in list(self._warm):
+            instances.append(
+                {
+                    "id": warm.container_id[:12],
+                    "state": "starting",
+                    "sessions": 0,
+                    "started_at": int(warm.created),
+                }
+            )
+        return {"state": state, "instances": instances}
+
     def status(self) -> Dict[str, Any]:
         pool = SubnetPool(self.settings.supernet, self.settings.net_prefix)
         return {
@@ -661,6 +807,7 @@ class SandboxManager:
                 "host": self._isolation.host if self._isolation else "unchecked",
             },
             "counters": dict(self._stats),
+            "telemetry": self.telemetry.stats(),
         }
 
     def listing(self) -> List[Dict[str, Any]]:
